@@ -1,0 +1,71 @@
+[project]
+name = "nonebot-plugin-hoyo-events"
+version = "0.1.0"
+description = "原神 / 崩坏：星穹铁道 / 绝区零 活动日历与未完成提醒 NoneBot2 插件"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.9"
+authors = [{ name = "Tony", email = "plia0974@uni.sydney.edu.au" }]
+keywords = [
+    "nonebot",
+    "nonebot2",
+    "genshin",
+    "starrail",
+    "zenless",
+    "hoyoverse",
+    "mihoyo",
+    "event",
+    "calendar",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Communications :: Chat",
+]
+dependencies = [
+    "nonebot2>=2.2.0",
+    "nonebot-adapter-onebot>=2.4.0",
+    "nonebot-plugin-apscheduler>=0.5.0",
+    "nonebot-plugin-localstore>=0.7.0",
+    "httpx>=0.27.0",
+    "pydantic>=2.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/TonyLiangP2010405/nonebot-plugin-hoyo-events"
+Repository = "https://github.com/TonyLiangP2010405/nonebot-plugin-hoyo-events"
+Issues = "https://github.com/TonyLiangP2010405/nonebot-plugin-hoyo-events/issues"
+
+[project.entry-points."nonebot.plugin"]
+nonebot_plugin_hoyo_events = "nonebot_plugin_hoyo_events"
+
+[tool.nonebot]
+plugins = ["nonebot_plugin_hoyo_events"]
+
+[build-system]
+requires = ["setuptools>=77.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["nonebot_plugin_hoyo_events*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM"]
+ignore = ["E501", "B008", "UP006", "UP007", "UP035", "UP045", "SIM105"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
