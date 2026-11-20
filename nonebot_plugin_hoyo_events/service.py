@@ -379,6 +379,28 @@ class ActivityService:
             )
         return targets
 
+    def person_statuses(self, scope: str, view: View, group_id: Optional[int] = None) -> list:
+        """按人统计：谁还差哪些编号的活动（用于「按人」的 @ 名单）。"""
+
+        players = self.store.players(scope)
+        muted = self.store.muted(group_id) if group_id is not None else set()
+        rows = []
+        for player_id in players:
+            try:
+                uid = int(player_id)
+            except (TypeError, ValueError):
+                continue
+            if uid in muted:
+                continue
+            done = self.store.done_uids(scope, uid)
+            done_idx = [entry.index for entry in view.entries if entry.activity.uid in done]
+            pending_idx = [entry.index for entry in view.entries if entry.activity.uid not in done]
+            if not pending_idx:
+                continue
+            rows.append({"uid": uid, "done": done_idx, "pending": pending_idx})
+        rows.sort(key=lambda row: (-len(row["pending"]), row["uid"]))
+        return rows
+
     def pending_by_user(self, scope: str, at: Optional[datetime] = None) -> dict:
         """``{用户id: [未完成活动]}``，推送时用来分组。"""
 

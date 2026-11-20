@@ -33,6 +33,9 @@ class Config(BaseModel):
     hoyo_events_max_events: int = Field(default=20, ge=1, le=60)
     """每个游戏最多展示多少条活动。"""
 
+    hoyo_events_at_style: str = "按人"
+    """推送时 @ 名单的排列方式：按人（每人一行）或 按活动（每个活动一行）。"""
+
     hoyo_events_max_at_users: int = Field(default=15, ge=1, le=50)
     """每条活动最多 @ 多少人，避免刷屏。"""
 

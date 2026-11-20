@@ -23,9 +23,10 @@ async def test_build_group_push(bot, offline):
     payload = jobs.build_group_push(888)
     assert payload is not None
     assert "幽境危战" in payload.head
-    labels = {target.activity.uid: target.users for target in payload.targets}
-    assert labels["ys.a#1"] == [200]  # 100 已完成这个活动
-    assert 100 in labels["ys.b#1"]  # 其它活动照常 @
+    # 默认「按人」：200 一个都没做（3 个），100 还差 2 个
+    users = [line.users[0] for line in payload.lines]
+    assert users == [200, 100]
+    assert payload.lines[1].suffix == "还差 2 个（已完成 1）"
 
 
 @pytest.mark.asyncio
@@ -41,7 +42,7 @@ async def test_push_group_once(bot, offline, monkeypatch):
     assert await jobs.push_group_once(888, bot=bot) is True
     message = bot.messages[-1]
     assert "今日活动提醒" in message.extract_plain_text()
-    assert _at_segments(message) == [100, 100, 100]  # 三个活动都没完成
+    assert _at_segments(message) == [100]  # 按人：一人一行
 
 
 @pytest.mark.asyncio
@@ -51,7 +52,8 @@ async def test_push_respects_completion_per_event(bot, offline, monkeypatch):
 
     await jobs.push_group_once(888, bot=bot)
     message = bot.messages[-1]
-    assert _at_segments(message) == [100]  # 只剩「虚构叙事」需要 @
+    assert _at_segments(message) == [100]  # 只剩「虚构叙事」
+    assert "还差 1 个（已完成 1 2）" in message.extract_plain_text()
 
 
 @pytest.mark.asyncio
@@ -63,7 +65,7 @@ async def test_push_skips_users_who_finished_everything(bot, offline):
     await jobs.push_group_once(888, bot=bot)
     message = bot.messages[-1]
     assert 100 not in _at_segments(message)
-    assert _at_segments(message).count(200) == 3
+    assert _at_segments(message).count(200) == 1
 
 
 @pytest.mark.asyncio

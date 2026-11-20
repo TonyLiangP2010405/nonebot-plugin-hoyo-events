@@ -180,7 +180,14 @@ def coerce_option(option: Option, raw: Any) -> tuple:
         return True, format_clock(*parsed)
 
     if option.kind == "choice":
-        cleaned = text.lower()
+        cleaned = text.strip()
+        if option.key == "at_style":
+            if cleaned in {"按人", "按人排", "人", "person", "每人"}:
+                return True, "按人"
+            if cleaned in {"按活动", "按活动排", "活动", "event", "按事件"}:
+                return True, "按活动"
+            return False, "只能填 按人 / 按活动"
+        cleaned = cleaned.lower()
         if cleaned in {"群管", "管理员", "管理", "admin", "owner"}:
             return True, True if option.key == "push_admin_only" else cleaned
         if cleaned in {"所有人", "全员", "普通群友", "all", "everyone", "member"}:
@@ -204,6 +211,7 @@ class GroupSettings:
     max_events: int = 20
     max_at_users: int = 15
     max_at_lines: int = 12
+    at_style: str = "按人"
     list_at: bool = False
     allow_add_others: bool = True
     max_watch: int = 50
@@ -237,6 +245,7 @@ class SettingsResolver:
             "remind_days": cfg.hoyo_events_remind_days,
             "max_events": cfg.hoyo_events_max_events,
             "max_at_users": cfg.hoyo_events_max_at_users,
+            "at_style": cfg.hoyo_events_at_style,
             "max_at_lines": cfg.hoyo_events_max_at_lines,
             "list_at": cfg.hoyo_events_list_at,
             "allow_add_others": cfg.hoyo_events_allow_add_others,
@@ -303,6 +312,7 @@ class SettingsResolver:
             remind_days=int(self.group_value(group_id, "remind_days") or 0),
             max_events=int(self.group_value(group_id, "max_events") or 1),
             max_at_users=int(self.group_value(group_id, "max_at_users") or 1),
+            at_style=str(self.group_value(group_id, "at_style") or "按人"),
             max_at_lines=int(self.group_value(group_id, "max_at_lines") or 1),
             list_at=bool(parse_bool(self.group_value(group_id, "list_at"))),
             allow_add_others=bool(parse_bool(self.group_value(group_id, "allow_add_others"))),
@@ -368,6 +378,8 @@ def format_value(option: Option, value: Any) -> str:
         return "开" if parse_bool(value) else "关"
     if option.kind == "choice" and option.key == "push_admin_only":
         return "群管" if parse_bool(value) else "所有人"
+    if option.kind == "choice" and option.key == "at_style":
+        return str(value or "按人")
     if value is None or value == "":
         return "未设置"
     return str(value)

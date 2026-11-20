@@ -14,16 +14,17 @@ from nonebot.adapters.onebot.v11 import (
 from nonebot.params import CommandArg
 
 from .formatter import (
+    per_event_lines,
+    per_person_lines,
     render_completion,
     render_help,
     render_status,
-    render_target_line,
     render_view,
     render_watch_list,
 )
 from .games import GAME_BY_KEY, resolve_game
 from .jobs import push_group_once
-from .messaging import plain_message
+from .messaging import append_lines, plain_message
 from .models import fmt_md
 from .runtime import parse_push_time, service, store
 from .service import build_scope_key, build_view_key, scope_of_private
@@ -240,15 +241,19 @@ async def _send_list(matcher, event: MessageEvent, text: str) -> None:
 
     message = plain_message(body)
     if force_at and group_id:
-        targets = service.at_targets(scope, view.activities(), group_id)
-        if targets:
+        current = service.group_settings(group_id)
+        if current.at_style == "按活动":
+            lines = per_event_lines(
+                service.at_targets(scope, view.activities(), group_id), current.max_at_lines
+            )
+        else:
+            lines = per_person_lines(
+                service.person_statuses(scope, view, group_id), current.max_at_users
+            )
+        if lines:
             message = Message(MessageSegment.text(body))
             message += MessageSegment.text("\n\n⚠️ 还没完成的群友：")
-            for target in targets:
-                message += MessageSegment.text("\n" + render_target_line(target))
-                for uid in target.users:
-                    message += MessageSegment.at(uid)
-                    message += MessageSegment.text(" ")
+            append_lines(message, lines)
 
     await matcher.send(message)
 

@@ -35,17 +35,29 @@ def build_group_push(group_id: int) -> Optional[object]:
     if not view.entries:
         return None
 
-    targets = service.at_targets(scope, view.activities(), group_id)
-    # 已经全部完成的群友不会被 @，活动也不会再出现在名单里
     service.remember_view(scope, view)
-    payload = render_push(
+
+    if current.at_style == "按活动":
+        targets = service.at_targets(scope, view.activities(), group_id)
+        return render_push(
+            view,
+            targets=targets,
+            style="event",
+            remind_days=current.remind_days,
+            no_player_hint=not store.players(scope),
+            max_at_lines=current.max_at_lines,
+            max_at_users=current.max_at_users,
+        )
+
+    persons = service.person_statuses(scope, view, group_id)
+    return render_push(
         view,
-        targets,
+        persons=persons,
+        style="person",
         remind_days=current.remind_days,
         no_player_hint=not store.players(scope),
-        max_at_lines=current.max_at_lines,
+        max_at_users=current.max_at_users,
     )
-    return payload
 
 
 async def push_group_once(group_id: int, bot: Optional[Bot] = None) -> bool:

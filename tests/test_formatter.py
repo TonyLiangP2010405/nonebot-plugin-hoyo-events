@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import timedelta
 
 from nonebot_plugin_hoyo_events.formatter import (
+    per_event_lines,
+    per_person_lines,
     render_completion,
     render_help,
     render_push,
@@ -65,10 +67,12 @@ def test_render_push_with_targets():
     view = _view()
     activity = view.entries[0].activity
     targets = [AtTarget(activity=activity, users=[100, 101], total=2)]
-    payload = render_push(view, targets)
+    payload = render_push(view, targets=targets, style="event")
     assert payload.has_targets
     assert "还没完成的群友" in payload.head
     assert "已完成 编号" in payload.tail
+    assert payload.lines[0].users == [100, 101]
+    assert payload.lines[0].prefix.endswith("：")
     line = render_target_line(targets[0])
     assert "幽境危战" in line and line.endswith("：")
 
@@ -107,10 +111,25 @@ def test_push_collapses_too_many_at_lines():
     view = _view()
     base = view.entries[0].activity
     targets = [AtTarget(activity=base, users=[uid], total=1) for uid in range(100, 100 + 15)]
-    payload = render_push(view, targets, max_at_lines=10)
-    assert len(payload.targets) == 10
-    assert payload.overflow is not None
-    count, users = payload.overflow
-    assert count == 5
-    assert users == [110, 111, 112, 113, 114]
-    assert payload.has_targets
+    lines = per_event_lines(targets, max_at_lines=10)
+    assert len(lines) == 11
+    assert lines[-1].prefix == "· 其余 5 个活动："
+    assert lines[-1].users == [110, 111, 112, 113, 114]
+
+
+def test_per_person_lines():
+    rows = [
+        {"uid": 100, "done": [1, 2], "pending": [3, 4, 5]},
+        {"uid": 200, "done": [], "pending": [1, 2, 3]},
+    ]
+    lines = per_person_lines(rows, max_at_users=10)
+    assert [line.users for line in lines] == [[100], [200]]
+    assert lines[0].suffix == "还差 3 个（已完成 1 2）"
+    assert lines[1].suffix == "还差 3 个"
+
+
+def test_per_person_lines_caps_users():
+    rows = [{"uid": uid, "done": [], "pending": [1]} for uid in range(100, 120)]
+    lines = per_person_lines(rows, max_at_users=15)
+    assert len(lines) == 16
+    assert "还有 5 人未完成" in lines[-1].prefix

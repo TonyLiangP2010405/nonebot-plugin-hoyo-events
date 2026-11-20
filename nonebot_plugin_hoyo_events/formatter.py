@@ -99,37 +99,34 @@ def render_view(
 
 
 @dataclass
+class MentionLine:
+    """推送里的一个 @ 小节：前缀文字 + 若干 @ + 后缀文字。"""
+
+    prefix: str = ""
+    users: list = field(default_factory=list)
+    suffix: str = ""
+
+
+@dataclass
 class PushMessage:
-    """推送消息：标题 + 正文 + 分段 @ 名单 + 结尾。"""
+    """推送消息：正文 + @ 小节 + 结尾。"""
 
     head: str = ""
-    targets: list = field(default_factory=list)
+    lines: list = field(default_factory=list)
     tail: str = ""
     view: Optional[View] = None
-    overflow: Optional[tuple] = None
-    """活动太多时合并的一行：(剩余活动数, 待 @ 的用户)。"""
 
     @property
     def has_targets(self) -> bool:
-        return bool(self.targets or self.overflow)
+        return any(line.users for line in self.lines)
 
 
-def render_push(
-    view: View,
-    targets: list,
-    remind_days: int = 3,
-    title: str = "",
-    no_player_hint: bool = False,
-    max_at_lines: int = 12,
-) -> PushMessage:
-    head = render_view(
-        view,
-        remind_days=remind_days,
-        show_legend=True,
-        title=title or f"📢 今日活动提醒 · {fmt_md(view.at)}",
-        footer="",
-    )
+def per_event_lines(targets: list, max_at_lines: int = 12) -> list:
+    """按活动：每个活动一行「· 活动名 · 剩 N 天：@A @B」。"""
 
+    if not targets:
+        return []
+    kept = targets
     overflow = None
     if max_at_lines > 0 and len(targets) > max_at_lines:
         rest = targets[max_at_lines:]
@@ -139,24 +136,78 @@ def render_push(
                 if uid not in merged:
                     merged.append(uid)
         overflow = (len(rest), merged)
-        targets = targets[:max_at_lines]
+        kept = targets[:max_at_lines]
 
-    # 「还没完成的群友」标题必须放在正文尾部（@ 名单之前），
-    # 因为正文和 @ 名单是分两段拼的
-    if targets:
+    lines = [
+        MentionLine(prefix=render_target_line(target), users=list(target.users)) for target in kept
+    ]
+    if overflow:
+        count, users = overflow
+        lines.append(MentionLine(prefix=f"· 其余 {count} 个活动：", users=users))
+    return lines
+
+
+def per_person_lines(rows: list, max_at_users: int = 15) -> list:
+    """按人：每人一行「· @小明 还差 18 个（已完成 1 2）」。"""
+
+    if not rows:
+        return []
+    shown = rows[:max_at_users]
+    lines = []
+    for row in shown:
+        suffix = f"还差 {len(row['pending'])} 个"
+        done = row.get("done") or []
+        if done:
+            numbers = " ".join(str(index) for index in done[:8])
+            if len(done) > 8:
+                numbers += " …"
+            suffix += f"（已完成 {numbers}）"
+        lines.append(MentionLine(prefix="· ", users=[row["uid"]], suffix=suffix))
+
+    hidden = len(rows) - len(shown)
+    if hidden > 0:
+        lines.append(
+            MentionLine(prefix=f"· …还有 {hidden} 人未完成（名单太长，只 @ 前 {len(shown)} 个）")
+        )
+    return lines
+
+
+def render_push(
+    view: View,
+    targets: Optional[list] = None,
+    persons: Optional[list] = None,
+    style: str = "person",
+    remind_days: int = 3,
+    title: str = "",
+    no_player_hint: bool = False,
+    max_at_lines: int = 12,
+    max_at_users: int = 15,
+) -> PushMessage:
+    head = render_view(
+        view,
+        remind_days=remind_days,
+        show_legend=True,
+        title=title or f"📢 今日活动提醒 · {fmt_md(view.at)}",
+        footer="",
+    )
+
+    lines: list = []
+    if style == "event" and targets:
+        lines = per_event_lines(targets, max_at_lines)
+    elif persons:
+        lines = per_person_lines(persons, max_at_users)
+
+    if lines:
         head = f"{head}\n{LINE}\n还没完成的群友："
 
     tail_lines = []
-    if not targets and no_player_hint:
+    if not lines and no_player_hint:
         tail_lines.append(
             f"{LINE}\n还没有人登记活动进度，发送「活动」即可加入每日提醒（只 @ 未完成的人）。"
         )
-
-    if targets:
+    if lines:
         tail_lines.append("发送「已完成 编号」即可不再被 @，例如：已完成 1 3")
-    return PushMessage(
-        head=head, targets=targets, tail="\n".join(tail_lines), view=view, overflow=overflow
-    )
+    return PushMessage(head=head, lines=lines, tail="\n".join(tail_lines), view=view)
 
 
 def render_target_line(target) -> str:
@@ -314,6 +365,7 @@ def render_help(push_time: str, remind_days: int, status_line: str = "") -> str:
         " · 活动设置 推送 开 / 关",
         f" · 活动设置 加急天数 {remind_days}",
         " · 活动设置 权限 群管 / 所有人",
+        " · 活动设置 @方式 按人 / 按活动",
         " · 活动设置 帮助      所有可改项",
         " · 活动提醒 立即      马上推一次试试",
         "",
