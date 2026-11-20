@@ -16,7 +16,7 @@ _✨ 原神 / 崩坏：星穹铁道 / 绝区零 活动日历与「未完成」@ 
 <a href="https://pypi.python.org/pypi/nonebot-plugin-hoyo-events">
     <img src="https://img.shields.io/pypi/v/nonebot-plugin-hoyo-events.svg" alt="pypi">
 </a>
-<img src="https://img.shields.io/badge/python-3.9+-blue.svg" alt="python">
+<img src="https://img.shields.io/badge/python-3.10+-blue.svg" alt="python">
 <img src="https://img.shields.io/badge/nonebot-2.2+-red.svg" alt="nonebot">
 
 </div>

@@ -1,11 +1,11 @@
 [project]
 name = "nonebot-plugin-hoyo-events"
-version = "0.1.0"
+version = "0.1.1"
 description = "原神 / 崩坏：星穹铁道 / 绝区零 活动日历与未完成提醒 NoneBot2 插件"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 authors = [{ name = "Tony", email = "plia0974@uni.sydney.edu.au" }]
 keywords = [
     "nonebot",
@@ -22,7 +22,6 @@ classifiers = [
     "Development Status :: 4 - Beta",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -59,7 +58,7 @@ include = ["nonebot_plugin_hoyo_events*"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py39"
+target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM"]
