@@ -3,131 +3,133 @@ from __future__ import annotations
 from datetime import timedelta
 
 import pytest
-from helpers import SELF_ID
+from helpers import activity_dict, group_event
+from nonebot.message import handle_event
 
 from nonebot_plugin_hoyo_events import jobs
 from nonebot_plugin_hoyo_events.models import now
 from nonebot_plugin_hoyo_events.runtime import service, store
+from nonebot_plugin_hoyo_events.store import DataStore
 
 
 def _at_segments(message) -> list:
     return [int(seg.data["qq"]) for seg in message if seg.type == "at"]
 
 
+def _enable(bot, monkeypatch, *uids, push_time="21:00"):
+    monkeypatch.setattr(jobs, "_bots", lambda: [bot])
+    store.update_group(888, push_enabled=True, push_time=push_time)
+    for uid in uids:
+        store.touch_player("g888", uid, f"群友{uid}")
+    hour, minute = map(int, push_time.split(":"))
+    return now().replace(hour=hour, minute=minute, second=0, microsecond=0)
+
+
 @pytest.mark.asyncio
-async def test_build_group_push(bot, offline):
-    store.touch_player("g888", 100, "小明")
-    store.touch_player("g888", 200, "小红")
+async def test_personal_reminders_take_turns_across_midnight(bot, offline, monkeypatch):
+    start = _enable(bot, monkeypatch, 100, 200, 300, push_time="23:55")
+    assert await jobs.push_due_groups(start - timedelta(minutes=1)) == []
+
+    assert await jobs.push_due_groups(start) == [888]
+    assert _at_segments(bot.messages[-1]) == [100]
+    assert "15 分钟后提醒下一位" in bot.last_text
+    assert await jobs.push_due_groups(start + timedelta(minutes=14)) == []
+
+    assert await jobs.push_due_groups(start + timedelta(minutes=15)) == [888]
+    assert _at_segments(bot.messages[-1]) == [200]
+    assert await jobs.push_due_groups(start + timedelta(minutes=30)) == [888]
+    assert _at_segments(bot.messages[-1]) == [300]
+    assert "提醒下一位" not in bot.last_text
+    assert await jobs.push_due_groups(start + timedelta(minutes=45)) == []
+
+
+@pytest.mark.asyncio
+async def test_reminder_lists_both_statuses_and_saves_numbers_for_recipient(bot, offline, monkeypatch):
+    start = _enable(bot, monkeypatch, 100, 200)
     store.mark_done("g888", 100, ["ys.a#1"])
+    assert await jobs.push_due_groups(start) == [888]
+    assert _at_segments(bot.messages[-1]) == [100]
+    pending, completed = bot.last_text.split("\n已完成（")
+    assert "未完成（2 项）" in pending
+    assert "02. 原神 · 砺行修远" in pending
+    assert "01. 原神 · 幽境危战" in completed
 
-    payload = jobs.build_group_push(888)
-    assert payload is not None
-    assert "幽境危战" in payload.head
-    # 默认「按人」：200 一个都没做（3 个），100 还差 2 个
-    users = [line.users[0] for line in payload.lines]
-    assert users == [200, 100]
-    assert payload.lines[1].suffix == "还差 2 个（已完成 1）"
+    await handle_event(bot, group_event("/已完成 2", user_id=200))
+    assert store.done_uids("g888", 200) == set()
 
-
-@pytest.mark.asyncio
-async def test_build_group_push_without_events(bot, clean_store):
-    assert jobs.build_group_push(888) is None
-
-
-@pytest.mark.asyncio
-async def test_push_group_once(bot, offline, monkeypatch):
-    store.touch_player("g888", 100, "小明")
-    monkeypatch.setattr(jobs, "_bots", lambda: [bot])
-
-    assert await jobs.push_group_once(888, bot=bot) is True
-    message = bot.messages[-1]
-    assert "今日活动提醒" in message.extract_plain_text()
-    assert _at_segments(message) == [100]  # 按人：一人一行
+    await handle_event(bot, group_event("/已完成 2", user_id=100))
+    assert store.done_uids("g888", 100) == {"ys.a#1", "ys.b#1"}
 
 
 @pytest.mark.asyncio
-async def test_push_respects_completion_per_event(bot, offline, monkeypatch):
-    store.touch_player("g888", 100, "小明")
-    store.mark_done("g888", 100, ["ys.a#1", "ys.b#1"])
+async def test_queue_skips_users_who_finish_waiting_or_mute(bot, offline, monkeypatch):
+    start = _enable(bot, monkeypatch, 100, 200, 300, 400)
+    assert await jobs.push_due_groups(start) == [888]
+    store.mark_done("g888", 200, ["ys.a#1", "ys.b#1", "sr.a#1"])
+    store.mute(888, 300)
 
-    await jobs.push_group_once(888, bot=bot)
-    message = bot.messages[-1]
-    assert _at_segments(message) == [100]  # 只剩「虚构叙事」
-    assert "还差 1 个（已完成 1 2）" in message.extract_plain_text()
-
-
-@pytest.mark.asyncio
-async def test_push_skips_users_who_finished_everything(bot, offline):
-    store.touch_player("g888", 100, "小明")
-    store.touch_player("g888", 200, "小红")
-    store.mark_done("g888", 100, ["ys.a#1", "ys.b#1", "sr.a#1"])
-
-    await jobs.push_group_once(888, bot=bot)
-    message = bot.messages[-1]
-    assert 100 not in _at_segments(message)
-    assert _at_segments(message).count(200) == 1
+    assert await jobs.push_due_groups(start + timedelta(minutes=15)) == [888]
+    assert _at_segments(bot.messages[-1]) == [400]
+    assert "提醒下一位" not in bot.last_text
 
 
 @pytest.mark.asyncio
-async def test_push_due_groups_once_per_day(bot, offline, monkeypatch):
-    store.update_group(888, push_enabled=True, push_time="00:00")
-    store.touch_player("g888", 100, "小明")
-    monkeypatch.setattr(jobs, "_bots", lambda: [bot])
-    monkeypatch.setattr(jobs, "push_group_once", _fake_push(bot))
+async def test_new_activity_resumes_reminders_after_everyone_finishes(bot, offline, monkeypatch):
+    start = _enable(bot, monkeypatch, 100, 200)
+    assert await jobs.push_due_groups(start) == [888]
+    for user_id in (100, 200):
+        store.mark_done("g888", user_id, ["ys.a#1", "ys.b#1", "sr.a#1"])
+    assert await jobs.push_due_groups(start + timedelta(minutes=15)) == []
 
-    pushed = await jobs.push_due_groups(now())
-    assert pushed == [888]
-    assert store.group(888)["last_push"] == now().date().isoformat()
-
-    again = await jobs.push_due_groups(now())
-    assert again == []
-
-
-@pytest.mark.asyncio
-async def test_push_due_groups_respects_time(bot, offline, monkeypatch):
-    store.update_group(888, push_enabled=True, push_time="23:59")
-    store.touch_player("g888", 100, "小明")
-    monkeypatch.setattr(jobs, "push_group_once", _fake_push(bot))
-
-    early = now().replace(hour=0, minute=1)
-    assert await jobs.push_due_groups(early) == []
-    late = now().replace(hour=23, minute=59)
-    assert await jobs.push_due_groups(late) == [888]
+    store.snapshot("ys")["activities"].append(activity_dict("新活动", "ys", "ys.new#1", 5))
+    assert await jobs.push_due_groups(start + timedelta(minutes=20)) == [888]
+    assert _at_segments(bot.messages[-1]) == [200]
+    assert "未完成（1 项）" in bot.last_text
+    assert "新活动" in bot.last_text
+    assert await jobs.push_due_groups(start + timedelta(minutes=35)) == [888]
+    assert _at_segments(bot.messages[-1]) == [100]
+    assert await jobs.push_due_groups(start + timedelta(minutes=50)) == []
 
 
 @pytest.mark.asyncio
-async def test_push_due_groups_disabled(bot, offline, monkeypatch):
+async def test_persisted_queue_resumes_without_duplicate(bot, offline, tmp_path, monkeypatch):
+    start = _enable(bot, monkeypatch, 100, 200)
+    monkeypatch.setattr(store, "path", tmp_path / "reminders.json")
+    assert await jobs.push_due_groups(start) == [888]
+
+    reloaded = DataStore(store.path)
+    await reloaded.load()
+    monkeypatch.setattr(store, "_data", reloaded.data)
+    assert await jobs.push_due_groups(start + timedelta(minutes=2)) == []
+    assert await jobs.push_due_groups(start + timedelta(minutes=15)) == [888]
+    assert _at_segments(bot.messages[-1]) == [200]
+
+
+@pytest.mark.asyncio
+async def test_disabled_group_and_empty_list_stay_silent(bot, offline, monkeypatch):
+    start = _enable(bot, monkeypatch)
+    assert await jobs.push_due_groups(start) == []
+    store.touch_player("g888", 100)
     store.update_group(888, push_enabled=False)
-    monkeypatch.setattr(jobs, "push_group_once", _fake_push(bot))
-    assert await jobs.push_due_groups(now()) == []
+    assert await jobs.push_due_groups(start) == []
+    assert not bot.messages
 
 
 @pytest.mark.asyncio
-async def test_push_retries_then_gives_up(bot, offline, monkeypatch):
-    store.update_group(888, push_enabled=True, push_time="00:00")
-    store.touch_player("g888", 100, "小明")
+async def test_failed_recipient_does_not_block_the_next_one(bot, offline, monkeypatch):
+    start = _enable(bot, monkeypatch, 100, 200)
+    original = bot.call_api
 
-    async def fail(group_id, bot=None):
-        return False
+    async def fail_for_first(api, **data):
+        if _at_segments(data["message"]) == [100]:
+            raise RuntimeError("测试：发送失败")
+        return await original(api, **data)
 
-    monkeypatch.setattr(jobs, "push_group_once", fail)
-    for _ in range(jobs.MAX_PUSH_ATTEMPTS):
-        assert await jobs.push_due_groups(now()) == []
-
-    # 达到重试上限后当天不再尝试
-    assert store.group(888)["last_push"] == now().date().isoformat()
-    assert await jobs.push_due_groups(now()) == []
-
-
-def _fake_push(fake_bot):
-    async def _push(group_id, bot=None):
-        payload = jobs.build_group_push(group_id)
-        if payload is None:
-            return False
-        fake_bot.sent.append(("send_group_msg", {"message": "pushed", "group_id": group_id}))
-        return True
-
-    return _push
+    monkeypatch.setattr(bot, "call_api", fail_for_first)
+    for minute in range(jobs.MAX_PUSH_ATTEMPTS):
+        assert await jobs.push_due_groups(start + timedelta(minutes=minute)) == []
+    assert await jobs.push_due_groups(start + timedelta(minutes=jobs.MAX_PUSH_ATTEMPTS)) == [888]
+    assert _at_segments(bot.messages[-1]) == [200]
 
 
 @pytest.mark.asyncio
@@ -142,17 +144,3 @@ async def test_refresh_all_uses_source(monkeypatch):
     result = await jobs.refresh_all(force=True)
     assert result == {"ys": "ok"}
     assert calls["force"] is True
-
-
-def test_view_expiry_between_push_and_query(bot, offline):
-    """群里推送的编号要能被人用来「已完成 N」。"""
-
-    store.touch_player("g888", 100, "小明")
-    payload = jobs.build_group_push(888)
-    assert payload is not None
-
-    view = service.get_view("g888")
-    assert view is not None
-    assert view.entries[0].activity.uid == "ys.a#1"
-    assert (now() - view.at) < timedelta(minutes=1)
-    assert SELF_ID  # 便于 lint

@@ -5,11 +5,19 @@ from datetime import datetime
 from typing import Optional
 
 from .games import GAME_BY_KEY
-from .models import Activity, View, fmt_datetime, fmt_md
+from .models import Activity, Entry, View, fmt_datetime, fmt_md
 
 LINE = "━━━━━━━━━━"
 MAX_LINES = 42
 NAME_LIMIT = 26
+REMINDER_FOOTER = "发送「已完成 编号」记录进度，例如：已完成 1 3"
+
+
+def personal_reminder_row(entry: Entry, at: datetime) -> str:
+    game = GAME_BY_KEY.get(entry.activity.game)
+    prefix = game.short if game else entry.activity.game
+    row = f"{entry.index:02d}. {prefix} · {entry.activity.name}"
+    return row if entry.done else f"{row} · {entry.remaining(at)}"
 
 
 def _clip(text: str, limit: int = NAME_LIMIT) -> str:
@@ -115,6 +123,7 @@ class PushMessage:
     lines: list = field(default_factory=list)
     tail: str = ""
     view: Optional[View] = None
+    remind_days: int = 3
 
     @property
     def has_targets(self) -> bool:
@@ -206,8 +215,10 @@ def render_push(
             f"{LINE}\n还没有人登记活动进度，发送「活动」即可加入每日提醒（只 @ 未完成的人）。"
         )
     if lines:
-        tail_lines.append("发送「已完成 编号」即可不再被 @，例如：已完成 1 3")
-    return PushMessage(head=head, lines=lines, tail="\n".join(tail_lines), view=view)
+        tail_lines.append("发送「已完成 编号」记录进度，例如：已完成 1 3")
+    return PushMessage(
+        head=head, lines=lines, tail="\n".join(tail_lines), view=view, remind_days=remind_days
+    )
 
 
 def render_target_line(target) -> str:
@@ -365,9 +376,8 @@ def render_help(push_time: str, remind_days: int, status_line: str = "") -> str:
         " · 活动设置 推送 开 / 关",
         f" · 活动设置 加急天数 {remind_days}",
         " · 活动设置 权限 群管 / 所有人",
-        " · 活动设置 @方式 按人 / 按活动",
         " · 活动设置 帮助      所有可改项",
-        " · 活动提醒 立即      马上推一次试试",
+        " · 活动提醒 立即      提醒队列里的下一位",
         "",
         "【其它】",
         " · 活动刷新（超管）   手动拉最新数据",

@@ -143,7 +143,7 @@ async def test_push_time_change_takes_effect(bot, offline, monkeypatch):
     await handle_event(bot, group_event("/活动设置 推送 开", user_id=50, role="owner"))
     await handle_event(bot, group_event("/活动设置 时间 23:59", user_id=50, role="owner"))
     store.touch_player("g888", 100, "小明")
-    monkeypatch.setattr(jobs, "push_group_once", _fake_push(bot))
+    monkeypatch.setattr(jobs, "_bots", lambda: [bot])
 
     early = now().replace(hour=1, minute=0)
     assert await jobs.push_due_groups(early) == []
@@ -153,14 +153,6 @@ async def test_push_time_change_takes_effect(bot, offline, monkeypatch):
 
 async def _noop_commit():
     return None
-
-
-def _fake_push(fake_bot):
-    async def _push(group_id, bot=None):
-        fake_bot.sent.append(("send_group_msg", {"message": "pushed", "group_id": group_id}))
-        return True
-
-    return _push
 
 
 @pytest.mark.asyncio

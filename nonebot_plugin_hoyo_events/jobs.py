@@ -1,21 +1,23 @@
 from __future__ import annotations
 
+import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 import nonebot
 from nonebot.adapters.onebot.v11 import Bot
 
-from .formatter import render_push
-from .messaging import build_push_message
-from .models import fmt_md, now, parse_datetime
-from .runtime import default_push_time, service, store
-from .service import build_scope_key
+from .messaging import build_personal_reminder_message
+from .models import Entry, View, now, parse_datetime
+from .runtime import service, store
+from .service import build_scope_key, build_view_key
 
 logger = logging.getLogger("nonebot_plugin_hoyo_events")
 
 MAX_PUSH_ATTEMPTS = 5
+REMINDER_INTERVAL = timedelta(minutes=15)
+_push_lock = asyncio.Lock()
 
 
 def _bots() -> list:
@@ -26,131 +28,121 @@ def _bots() -> list:
     return result
 
 
-def build_group_push(group_id: int) -> Optional[object]:
-    """构造某个群的推送消息，没有活动时返回 None。"""
-
+def _reminder_queue(group_id: int, active_ids: set[str], state: dict) -> list[tuple[int, set[str]]]:
     scope = build_scope_key(group_id)
-    current = service.group_settings(group_id)
-    view = service.build_view(None, scope, 0, group_id=group_id)
-    if not view.entries:
-        return None
-
-    service.remember_view(scope, view)
-
-    if current.at_style == "按活动":
-        targets = service.at_targets(scope, view.activities(), group_id)
-        return render_push(
-            view,
-            targets=targets,
-            style="event",
-            remind_days=current.remind_days,
-            no_player_hint=not store.players(scope),
-            max_at_lines=current.max_at_lines,
-            max_at_users=current.max_at_users,
-        )
-
-    persons = service.person_statuses(scope, view, group_id)
-    return render_push(
-        view,
-        persons=persons,
-        style="person",
-        remind_days=current.remind_days,
-        no_player_hint=not store.players(scope),
-        max_at_users=current.max_at_users,
-    )
+    muted = store.muted(group_id)
+    sent = state["sent"]
+    attempts = state["attempts"]
+    queue = []
+    for key in store.players(scope):
+        if not key.isdecimal():
+            continue
+        uid = int(key)
+        if uid in muted or attempts.get(key, 0) >= MAX_PUSH_ATTEMPTS:
+            continue
+        pending = active_ids - store.done_uids(scope, uid)
+        if pending.difference(sent.get(key, [])):
+            queue.append((uid, pending))
+    last_user = state.get("last_user", 0)
+    # 从上一次提醒过的人后面接着排，跨天积压时也能轮到后面的成员。
+    queue.sort(key=lambda item: (item[0] <= last_user, item[0]))
+    return queue
 
 
-async def push_group_once(group_id: int, bot: Optional[Bot] = None) -> bool:
-    """给单个群推送一次，返回是否成功。"""
+async def push_group_once(
+    group_id: int,
+    bot: Optional[Bot] = None,
+    *,
+    current: Optional[datetime] = None,
+    scheduled: bool = False,
+) -> bool:
+    """发送队列中的下一张个人卡片。群内两次成功提醒至少间隔 15 分钟。"""
 
     await service.startup()
-    if not service.has_data():
-        await service.ensure_data()
-    payload = build_group_push(group_id)
-    if payload is None:
-        logger.info("群 %s 没有进行中的活动，跳过推送", group_id)
-        return False
-
-    message = build_push_message(payload)
     candidates = [bot] if bot else _bots()
-    for candidate in candidates:
-        if candidate is None:
-            continue
-        try:
-            await candidate.send_group_msg(group_id=group_id, message=message)
-            logger.info("群 %s 活动推送成功", group_id)
+    if not candidates:
+        return False
+    if not scheduled and not service.has_data():
+        await service.ensure_data()
+
+    async with _push_lock:
+        at = current or now()
+        settings = service.group_settings(group_id)
+        start = at.replace(hour=settings.hour, minute=settings.minute, second=0, microsecond=0)
+        day = (start if at >= start else start - timedelta(days=1)).date().isoformat()
+        state = store.group(group_id).get("personal_reminders") or {}
+        if scheduled and (not settings.push_enabled or (at < start and state.get("day") != day)):
+            return False
+        last_sent = parse_datetime(state.get("last_sent"))
+        if last_sent and at - last_sent < REMINDER_INTERVAL:
+            return False
+
+        new_round = state.get("day") != day
+        if new_round:
+            state.update(day=day, sent={}, attempts={})
+            store.update_group(group_id, personal_reminders=state)
+
+        activities = service.active_activities(at=at)
+        active_ids = {activity.uid for activity in activities}
+        queue = _reminder_queue(group_id, active_ids, state)
+        if not queue:
+            if new_round:
+                await store.commit()
+            return False
+
+        uid, pending = queue[0]
+        scope = build_scope_key(group_id)
+        record = store.player(scope, uid)
+        view = View(at, entries=[
+            Entry(index, activity, done=activity.uid not in pending)
+            for index, activity in enumerate(activities, start=1)
+        ])
+        message = await build_personal_reminder_message(
+            view, record.get("nick") or str(uid), uid, len(queue) > 1
+        )
+        # 渲染期间用户可能已经做完、静音、退订或关闭群提醒。
+        if (
+            not store.player(scope, uid)
+            or uid in store.muted(group_id)
+            or pending != active_ids - store.done_uids(scope, uid)
+            or (scheduled and not service.group_settings(group_id).push_enabled)
+        ):
+            if new_round:
+                await store.commit()
+            return False
+
+        key = str(uid)
+        for candidate in candidates:
+            try:
+                await candidate.send_group_msg(group_id=group_id, message=message)
+            except Exception as exc:
+                logger.warning("群 %s 给 %s 的活动提醒发送失败：%s", group_id, uid, exc)
+                continue
+            state["last_sent"] = (current or now()).isoformat()
+            state["last_user"] = uid
+            state["sent"][key] = sorted(pending.union(state["sent"].get(key, [])))
+            state["attempts"].pop(key, None)
+            view_key = build_view_key(group_id, uid)
+            latest = service.get_view(view_key)
+            if latest is None or latest.at <= view.at:
+                service.remember_view(view_key, view)
+            await store.commit()
             return True
-        except Exception as exc:  # noqa: BLE001 - 单个 bot 失败不影响其他 bot
-            logger.warning("群 %s 活动推送失败：%s", group_id, exc)
-    return False
 
-
-def group_push_time(record: dict) -> tuple:
-    hour, minute = default_push_time()
-    try:
-        hour = int(record.get("hour", hour))
-        minute = int(record.get("minute", minute))
-    except (TypeError, ValueError):
-        pass
-    if not (0 <= hour <= 23):
-        hour = default_push_time()[0]
-    if not (0 <= minute <= 59):
-        minute = default_push_time()[1]
-    return hour, minute
+        attempts = state["attempts"]
+        attempts[key] = attempts.get(key, 0) + 1
+        await store.commit()
+        return False
 
 
 async def push_due_groups(current: Optional[datetime] = None) -> list:
-    """到点就推送；同一群一天只推一次。"""
+    """检查各群，每次最多给每个群发一张个人提醒。"""
 
     await service.startup()
-    current = current or now()
-    today = current.date().isoformat()
     pushed = []
-
-    for group_key, record in list(store.all_groups().items()):
-        if not isinstance(record, dict):
-            continue
-        try:
-            group_id = int(group_key)
-        except (TypeError, ValueError):
-            continue
-
-        current_settings = service.settings.group(group_id)
-        if not current_settings.push_enabled:
-            continue
-        hour, minute = current_settings.hour, current_settings.minute
-        if (current.hour, current.minute) < (hour, minute):
-            continue
-
-        if record.get("last_push") == today:
-            continue
-        if record.get("push_day") != today:
-            record["push_day"] = today
-            record["push_attempts"] = 0
-        attempts = int(record.get("push_attempts") or 0)
-        if attempts >= MAX_PUSH_ATTEMPTS:
-            record["last_push"] = today
-            continue
-
-        record["push_attempts"] = attempts + 1
-        if await push_group_once(group_id):
-            record["last_push"] = today
-            record["last_push_at"] = current.isoformat()
-            pushed.append(group_id)
-        elif record["push_attempts"] >= MAX_PUSH_ATTEMPTS:
-            # 重试用完，今天不再尝试，避免刷屏
-            record["last_push"] = today
-            logger.warning("群 %s 连续 %s 次推送失败，今天放弃", group_id, MAX_PUSH_ATTEMPTS)
-        else:
-            logger.warning(
-                "群 %s 第 %s 次推送失败（今天最多重试 %s 次）",
-                group_id,
-                attempts + 1,
-                MAX_PUSH_ATTEMPTS,
-            )
-
-    if store.all_groups():
-        await store.commit()
+    for key in list(store.all_groups()):
+        if key.isdecimal() and await push_group_once(int(key), current=current, scheduled=True):
+            pushed.append(int(key))
     return pushed
 
 
@@ -178,16 +170,26 @@ def register_jobs(scheduler) -> None:  # noqa: ANN001 - apscheduler 实例
     @scheduler.scheduled_job(
         "interval",
         minutes=1,
-        id="hoyo_events_tick",
+        id="hoyo_events_refresh",
         coalesce=True,
         max_instances=1,
         misfire_grace_time=120,
     )
-    async def _tick_job() -> None:
+    async def _refresh_job() -> None:
         try:
             await refresh_if_due()
         except Exception as exc:  # noqa: BLE001
             logger.warning("定时刷新活动数据失败：%s", exc)
+
+    @scheduler.scheduled_job(
+        "interval",
+        seconds=10,
+        id="hoyo_events_reminders",
+        coalesce=True,
+        max_instances=1,
+        misfire_grace_time=120,
+    )
+    async def _reminder_job() -> None:
         try:
             await push_due_groups()
         except Exception as exc:  # noqa: BLE001
@@ -195,10 +197,8 @@ def register_jobs(scheduler) -> None:  # noqa: ANN001 - apscheduler 实例
 
 
 __all__ = [
-    "build_group_push",
     "push_due_groups",
     "push_group_once",
     "refresh_all",
     "register_jobs",
-    "fmt_md",
 ]

@@ -78,6 +78,14 @@ def bot():
     return make_bot()
 
 
+@pytest.fixture(autouse=True)
+def text_mode(monkeypatch):
+    # 既有测试验证文字内容，卡片测试单独开启图片模式。
+    from nonebot_plugin_hoyo_events.runtime import config
+
+    monkeypatch.setattr(config, "hoyo_events_cards", False)
+
+
 @pytest.fixture
 def offline(monkeypatch):
     """禁止测试联网、重置内存数据，并写入三个游戏的假快照。"""

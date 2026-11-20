@@ -1,6 +1,6 @@
 [project]
 name = "nonebot-plugin-hoyo-events"
-version = "0.3.2"
+version = "0.4.0"
 description = "原神 / 崩坏：星穹铁道 / 绝区零 活动日历与未完成提醒 NoneBot2 插件"
 readme = "README.md"
 license = "MIT"
@@ -34,6 +34,7 @@ dependencies = [
     "nonebot-plugin-apscheduler>=0.5.0",
     "nonebot-plugin-localstore>=0.7.0",
     "httpx>=0.27.0",
+    "pillow>=11.0.0",
     "pydantic>=2.0.0",
 ]
 
@@ -55,6 +56,9 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["nonebot_plugin_hoyo_events*"]
+
+[tool.setuptools.package-data]
+nonebot_plugin_hoyo_events = ["assets/*.png"]
 
 [tool.ruff]
 line-length = 100

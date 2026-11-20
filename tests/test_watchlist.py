@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import timedelta
+
 import pytest
 from helpers import group_event
 from nonebot.adapters.onebot.v11 import Message, MessageSegment
@@ -124,11 +126,14 @@ async def test_added_member_is_at_in_push(bot, offline, monkeypatch):
 
     from nonebot_plugin_hoyo_events import jobs
 
-    await jobs.push_group_once(888, bot=bot)
+    start = jobs.now()
+    store.update_group(888, push_time="00:00")
+    await jobs.push_group_once(888, bot=bot, current=start)
     message = bot.messages[-1]
     at_ids = [int(seg.data["qq"]) for seg in message if seg.type == "at"]
-    assert 200 in at_ids
-    assert 100 in at_ids
+    assert at_ids == [100]
+    await jobs.push_group_once(888, bot=bot, current=start + timedelta(minutes=15))
+    assert [int(seg.data["qq"]) for seg in bot.messages[-1] if seg.type == "at"] == [200]
 
 
 @pytest.mark.asyncio

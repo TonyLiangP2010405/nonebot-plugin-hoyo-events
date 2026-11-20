@@ -9,6 +9,12 @@ class Config(BaseModel):
     hoyo_events_enabled: bool = True
     """是否启用插件。"""
 
+    hoyo_events_cards: bool = True
+    """是否把活动列表、推送和多行命令回复渲染为图片卡片。"""
+
+    hoyo_events_card_font: str = ""
+    """卡片用的中文字体路径，留空时自动查找常见的系统中文字体。"""
+
     hoyo_events_api_base: str = "https://starrailassistant.top/api/v1/activity"
     """活动数据源前缀，插件会请求 ``{base}/{游戏}.json``（游戏为 ys / sr / zzz）。"""
 

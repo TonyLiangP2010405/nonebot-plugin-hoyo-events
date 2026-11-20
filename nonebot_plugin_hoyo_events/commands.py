@@ -19,13 +19,11 @@ from .formatter import (
     render_completion,
     render_help,
     render_status,
-    render_view,
     render_watch_list,
 )
 from .games import GAME_BY_KEY, resolve_game
 from .jobs import push_group_once
-from .messaging import append_lines, plain_message
-from .models import fmt_md
+from .messaging import append_lines, build_activity_message, build_text_card_message
 from .runtime import parse_push_time, service, store
 from .service import build_scope_key, build_view_key, scope_of_private
 from .settings import (
@@ -168,7 +166,9 @@ async def _handle_help(event: MessageEvent) -> None:
     group_id = event.group_id if isinstance(event, GroupMessageEvent) else None
     current = service.group_settings(group_id)
     await help_matcher.finish(
-        render_help(current.push_time, current.remind_days, _help_status(event))
+        await build_text_card_message(
+            render_help(current.push_time, current.remind_days, _help_status(event))
+        )
     )
 
 
@@ -197,11 +197,15 @@ async def _send_list(matcher, event: MessageEvent, text: str) -> None:
             event.group_id if isinstance(event, GroupMessageEvent) else None
         )
         await matcher.finish(
-            render_help(current.push_time, current.remind_days, _help_status(event))
+            await build_text_card_message(
+                render_help(current.push_time, current.remind_days, _help_status(event))
+            )
         )
     if tokens and tokens[0].lower() in SETTINGS_TOKENS:
         if isinstance(event, GroupMessageEvent):
-            await matcher.finish(service.settings.describe(event.group_id))
+            await matcher.finish(
+                await build_text_card_message(service.settings.describe(event.group_id))
+            )
         await matcher.finish("群设置要在群里用哦。")
 
     if not service.has_data():
@@ -224,24 +228,19 @@ async def _send_list(matcher, event: MessageEvent, text: str) -> None:
     await store.commit()
 
     if not view.entries:
-        await matcher.finish("🎉 当前没有进行中的活动。\n最近要开的活动会在每日推送里出现。")
+        await matcher.finish("🎉 当前没有进行中的活动。新活动开始后会自动加入未完成列表。")
 
-    if game:
-        meta = GAME_BY_KEY[game]
-        title = f"{meta.emoji}{meta.name} 活动 · {fmt_md(view.at)}"
-    else:
-        title = f"🎮 米哈游活动 · {fmt_md(view.at)}"
+    title = f"{GAME_BY_KEY[game].name}活动" if game else "米哈游活动"
 
-    body = render_view(
+    current = service.group_settings(group_id)
+    message = await build_activity_message(
         view,
-        remind_days=service.group_settings(group_id).remind_days,
         title=title,
+        remind_days=current.remind_days,
         footer="发送「已完成 编号」标记完成，如：已完成 1 3",
     )
 
-    message = plain_message(body)
     if force_at and group_id:
-        current = service.group_settings(group_id)
         if current.at_style == "按活动":
             lines = per_event_lines(
                 service.at_targets(scope, view.activities(), group_id), current.max_at_lines
@@ -251,7 +250,6 @@ async def _send_list(matcher, event: MessageEvent, text: str) -> None:
                 service.person_statuses(scope, view, group_id), current.max_at_users
             )
         if lines:
-            message = Message(MessageSegment.text(body))
             message += MessageSegment.text("\n\n⚠️ 还没完成的群友：")
             append_lines(message, lines)
 
@@ -315,10 +313,10 @@ async def _handle_done(event: MessageEvent, args: Message = CommandArg()) -> Non
         service.remember_view(build_view_key(group_id, user_id), view)
         await store.commit()
         await done_matcher.finish(
-            render_view(
+            await build_activity_message(
                 view,
                 remind_days=service.group_settings(group_id).remind_days,
-                title="📌 你还没完成的活动",
+                title="你还没完成的活动",
                 footer="发送「已完成 编号」标记，例如：已完成 1 3\n也可以「已完成 全部」一键完成。",
             )
         )
@@ -329,7 +327,9 @@ async def _handle_done(event: MessageEvent, args: Message = CommandArg()) -> Non
     outcome = await service.mark_completed(scope, user_id, tokens, nick=nick, view_keys=view_keys)
     pending = len(service.pending(scope, user_id))
     total = len(service.active_activities())
-    await done_matcher.finish(render_completion(outcome, pending, total))
+    await done_matcher.finish(
+        await build_text_card_message(render_completion(outcome, pending, total))
+    )
 
 
 # --------------------------------------------------------------------------- 未完成
@@ -355,10 +355,11 @@ async def _handle_todo(event: MessageEvent) -> None:
 
     done_count, total = service.done_count(scope, user_id)
     await todo_matcher.finish(
-        render_view(
+        await build_activity_message(
             view,
             remind_days=service.group_settings(group_id).remind_days,
-            title=f"📌 你还没完成的活动（{done_count}/{total}）",
+            title="你还没完成的活动",
+            progress=f"已完成 {done_count}/{total}",
             footer="发送「已完成 编号」标记，例如：已完成 1 3",
         )
     )
@@ -387,7 +388,9 @@ async def _handle_undo(event: MessageEvent, args: Message = CommandArg()) -> Non
     outcome = await service.unmark_completed(scope, user_id, tokens, view_keys=view_keys)
     pending = len(service.pending(scope, user_id))
     _, total = service.done_count(scope, user_id)
-    await undo_matcher.finish(render_completion(outcome, pending, total))
+    await undo_matcher.finish(
+        await build_text_card_message(render_completion(outcome, pending, total))
+    )
 
 
 # --------------------------------------------------------------------------- 免打扰
@@ -590,8 +593,10 @@ async def _handle_watchlist(event: MessageEvent) -> None:
         )
     rows.sort(key=lambda row: (-row["pending"], row["uid"]))
     await watchlist_matcher.finish(
-        render_watch_list(
-            rows, len(service.active_activities()), service.group_settings(group_id).max_watch
+        await build_text_card_message(
+            render_watch_list(
+                rows, len(service.active_activities()), service.group_settings(group_id).max_watch
+            )
         )
     )
 
@@ -620,13 +625,15 @@ async def _handle_push_settings(
 
     if action in {"状态", "查看", "info", "status"}:
         await push_matcher.finish(
-            render_status(
-                enabled=current.push_enabled,
-                push_time=current.push_time,
-                players=store.player_count(build_scope_key(group_id)),
-                data_status=service.data_status(),
-                total_active=len(service.active_activities()),
-                muted=int(event.get_user_id()) in store.muted(group_id),
+            await build_text_card_message(
+                render_status(
+                    enabled=current.push_enabled,
+                    push_time=current.push_time,
+                    players=store.player_count(build_scope_key(group_id)),
+                    data_status=service.data_status(),
+                    total_active=len(service.active_activities()),
+                    muted=int(event.get_user_id()) in store.muted(group_id),
+                )
             )
         )
 
@@ -637,7 +644,7 @@ async def _handle_push_settings(
         service.settings.set_group(group_id, "push_enabled", True)
         await store.commit()
         await push_matcher.finish(
-            f"✅ 已开启每日活动推送，每天 {current.push_time} 播报并 @ 未完成的群友。\n"
+            f"✅ 已开启每日活动提醒，每天 {current.push_time} 开始，每隔 15 分钟提醒一位群友。\n"
             "发送「活动设置 时间 22:00」可以改时间。"
         )
 
@@ -661,7 +668,7 @@ async def _handle_push_settings(
     if action in {"立即", "马上", "now", "推送"}:
         if await push_group_once(group_id, bot=bot):
             await push_matcher.finish()
-        await push_matcher.finish("这次推送失败了，可能是数据还没拉到或者机器人不在群里。")
+        await push_matcher.finish("这次没有发出个人提醒。可能没有待提醒成员、还没到间隔时间，或发送失败。")
 
     await push_matcher.finish(
         "用法：\n 活动提醒 开 / 关\n 活动提醒 时间 21:30\n 活动提醒 立即\n更多设置用「活动设置」"
@@ -690,10 +697,12 @@ async def _handle_settings(event: MessageEvent, args: Message = CommandArg()) ->
     rest = rest.strip()
 
     if not head or head in {"查看", "状态", "show", "list"}:
-        await settings_matcher.finish(service.settings.describe(group_id))
+        await settings_matcher.finish(
+            await build_text_card_message(service.settings.describe(group_id))
+        )
 
     if head in {"帮助", "help", "?"}:
-        await settings_matcher.finish(service.settings.help_text())
+        await settings_matcher.finish(await build_text_card_message(service.settings.help_text()))
 
     # ---- 全局设置（超管）
     if head.lower() in {"全局", "global"}:
@@ -739,7 +748,7 @@ async def _handle_settings(event: MessageEvent, args: Message = CommandArg()) ->
 
     extra = ""
     if option.key == "push_enabled" and value:
-        extra = f"\n每天 {service.settings.group(group_id).push_time} 自动播报。"
+        extra = f"\n每天 {service.settings.group(group_id).push_time} 开始逐人提醒。"
     await settings_matcher.finish(
         f"✅ 本群「{option.label}」已设为 {format_value(option, value)}。{extra}"
     )
@@ -760,4 +769,4 @@ async def _handle_refresh(event: MessageEvent) -> None:
         await refresh_matcher.finish(superuser_only)
     results = await service.ensure_data(force=True)
     summary = service.refresh_summary(results)
-    await refresh_matcher.finish(f"🔄 已刷新活动数据\n{summary}")
+    await refresh_matcher.finish(await build_text_card_message(f"已刷新活动数据\n{summary}"))

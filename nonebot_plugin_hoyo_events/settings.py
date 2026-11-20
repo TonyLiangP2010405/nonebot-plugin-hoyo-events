@@ -63,7 +63,7 @@ GROUP_OPTIONS: tuple = (
         ("at行数", "行数"),
         1,
         50,
-        hint="推送里最多几个活动单独列 @",
+        hint="手动查询提醒时最多几个活动单独列 @",
     ),
     Option("list_at", "查询时@", "bool", ("查询at", "列表at"), hint="查活动时是否 @ 未完成的人"),
     Option("allow_add_others", "允许@加人", "bool", ("加人", "关注权限")),
