@@ -133,9 +133,29 @@ async def _prepare() -> None:
 
 
 # --------------------------------------------------------------------------- 帮助
+HELP_TOKENS = {"帮助", "help", "?", "？", "菜单", "指令", "命令"}
+SETTINGS_TOKENS = {"设置", "配置", "设定"}
+
+
+def _help_status(event: MessageEvent) -> str:
+    """帮助末尾那行「本群当前状态」。"""
+
+    if not isinstance(event, GroupMessageEvent):
+        return "私聊可用：活动 / 已完成 / 未完成 / 取消完成；名单和群设置请到群里用。"
+
+    group_id = event.group_id
+    scope = build_scope_key(group_id)
+    current = service.group_settings(group_id)
+    return (
+        f"本群当前：推送{'开' if current.push_enabled else '关'} · {current.push_time} · "
+        f"加急 {current.remind_days} 天 · 名单 {store.player_count(scope)} 人\n"
+        "改设置：活动设置 · 看名单：活动名单"
+    )
+
+
 help_matcher = on_command(
     "活动帮助",
-    aliases={"活动说明", "hoyo帮助", "活动菜单"},
+    aliases={"活动说明", "hoyo帮助", "活动菜单", "活动指令", "活动命令", "帮助活动"},
     priority=5,
     block=True,
 )
@@ -146,7 +166,9 @@ async def _handle_help(event: MessageEvent) -> None:
     await service.startup()
     group_id = event.group_id if isinstance(event, GroupMessageEvent) else None
     current = service.group_settings(group_id)
-    await help_matcher.finish(render_help(current.push_time, current.remind_days))
+    await help_matcher.finish(
+        render_help(current.push_time, current.remind_days, _help_status(event))
+    )
 
 
 # --------------------------------------------------------------------------- 查询活动
@@ -167,6 +189,19 @@ async def _send_list(matcher, event: MessageEvent, text: str) -> None:
         maybe = resolve_game(token) if len(token) <= 10 else None
         if maybe:
             game = maybe.key
+
+    tokens = _split_tokens(text)
+    if tokens and tokens[0].lower() in HELP_TOKENS:
+        current = service.group_settings(
+            event.group_id if isinstance(event, GroupMessageEvent) else None
+        )
+        await matcher.finish(
+            render_help(current.push_time, current.remind_days, _help_status(event))
+        )
+    if tokens and tokens[0].lower() in SETTINGS_TOKENS:
+        if isinstance(event, GroupMessageEvent):
+            await matcher.finish(service.settings.describe(event.group_id))
+        await matcher.finish("群设置要在群里用哦。")
 
     if not service.has_data():
         await matcher.finish(

@@ -166,3 +166,40 @@ async def test_no_data(bot, clean_store):
     await handle_event(bot, group_event("/活动"))
     text = bot.sent[-1][1]["message"].extract_plain_text()
     assert "拿不到活动数据" in text
+
+
+@pytest.mark.asyncio
+async def test_help_lists_every_command(bot, offline):
+    await handle_event(bot, group_event("/活动帮助"))
+    text = bot.last_text
+    for keyword in (
+        "活动关注",
+        "活动名单",
+        "活动设置",
+        "已完成",
+        "未完成",
+        "取消完成",
+        "活动刷新",
+    ):
+        assert keyword in text, keyword
+    assert "本群当前" in text
+
+
+@pytest.mark.asyncio
+async def test_help_via_activity_command(bot, offline):
+    await handle_event(bot, group_event("/活动 帮助"))
+    assert "指令表" in bot.last_text
+
+
+@pytest.mark.asyncio
+async def test_settings_via_activity_command(bot, offline):
+    await handle_event(bot, group_event("/活动 设置"))
+    assert "本群活动设置" in bot.last_text
+
+
+@pytest.mark.asyncio
+async def test_help_menu_alias(bot, offline):
+    await handle_event(bot, group_event("/活动菜单"))
+    assert "指令表" in bot.last_text
+    await handle_event(bot, group_event("/活动指令"))
+    assert "指令表" in bot.last_text
