@@ -13,8 +13,11 @@ import nonebot  # noqa: E402
 import pytest  # noqa: E402
 
 nonebot.init(driver="~none", command_start={"/"}, superusers={"10000"})
-nonebot.load_plugin("nonebot_plugin_hoyo_events")
 
+# 注意：这里故意用普通 import 而不是 nonebot.load_plugin。
+# NoneBot 的插件加载器要求模块「加载前没有被 import 过」，在 pytest 里
+# 很容易因为收集顺序踩到这个坑；插件能否被 NoneBot 正常加载由
+# tests/test_load.py 在独立子进程里验证。
 from nonebot_plugin_hoyo_events.models import Activity, now  # noqa: E402
 from nonebot_plugin_hoyo_events.store import DataStore  # noqa: E402
 

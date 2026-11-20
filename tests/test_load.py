@@ -1,20 +1,80 @@
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
+import tempfile
+import textwrap
+
 import nonebot
 import pytest
 
+from nonebot_plugin_hoyo_events import __plugin_meta__
 from nonebot_plugin_hoyo_events.commands import _split_tokens
 from nonebot_plugin_hoyo_events.runtime import OVERRIDE_PATH, parse_push_time, service, store
 
 
-def test_plugin_is_loaded():
-    plugin = nonebot.get_plugin("nonebot_plugin_hoyo_events")
-    if plugin is None:
-        loaded = sorted(p.module_name for p in nonebot.get_loaded_plugins())
-        raise AssertionError(f"插件未注册，已加载的插件：{loaded}")
-    assert plugin.metadata is not None
-    assert plugin.metadata.name == "米哈游活动助手"
-    assert "~onebot.v11" in plugin.metadata.supported_adapters
+def test_plugin_metadata():
+    assert __plugin_meta__ is not None
+    assert __plugin_meta__.name == "米哈游活动助手"
+    assert __plugin_meta__.type == "application"
+    assert "~onebot.v11" in __plugin_meta__.supported_adapters
+    assert __plugin_meta__.homepage.startswith("https://github.com/")
+
+
+def test_plugin_can_be_loaded_by_nonebot():
+    """在干净的子进程里跑一次真正的 nonebot.load_plugin。"""
+
+    code = textwrap.dedent(
+        """
+        import nonebot
+
+        nonebot.init(driver="~none", command_start={"/"})
+        plugin = nonebot.load_plugin("nonebot_plugin_hoyo_events")
+        assert plugin is not None, "load_plugin 返回 None"
+        assert plugin.metadata is not None
+        print("LOADED", plugin.metadata.name)
+        """
+    )
+    env = {
+        **os.environ,
+        "HOYO_EVENTS_DATA_DIR": tempfile.mkdtemp(prefix="hoyo-load-test-"),
+        "COMMAND_START": '[""]',
+    }
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        timeout=180,
+        env=env,
+    )
+    output = result.stdout + result.stderr
+    assert result.returncode == 0, output
+    assert "LOADED" in result.stdout
+
+
+def test_matchers_registered():
+    from nonebot.matcher import Matcher
+
+    from nonebot_plugin_hoyo_events import commands
+
+    names = [
+        "help_matcher",
+        "list_matcher",
+        "game_matcher",
+        "done_matcher",
+        "todo_matcher",
+        "undo_matcher",
+        "mute_matcher",
+        "push_matcher",
+        "refresh_matcher",
+    ]
+    matcher_types = [getattr(commands, name) for name in names]
+    assert len(set(matcher_types)) == len(names)
+    assert all(issubclass(item, Matcher) for item in matcher_types)
+    assert {item.module.__name__ for item in matcher_types} == {
+        "nonebot_plugin_hoyo_events.commands"
+    }
 
 
 def test_override_template_exists():
@@ -47,3 +107,7 @@ async def test_store_load_without_data():
     await service.startup()
     assert isinstance(store.data, dict)
     assert "completions" in store.data
+
+
+def test_nonebot_is_initialized():
+    assert nonebot.get_driver() is not None
