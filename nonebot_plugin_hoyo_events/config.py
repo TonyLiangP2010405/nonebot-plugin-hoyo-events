@@ -41,3 +41,12 @@ class Config(BaseModel):
 
     hoyo_events_http_timeout: float = Field(default=15.0, gt=0)
     """请求数据源的超时时间（秒）。"""
+
+    hoyo_events_allow_add_others: bool = True
+    """是否允许群友用「活动关注 @某人」把别人加进提醒名单。"""
+
+    hoyo_events_max_watch: int = Field(default=50, ge=1, le=500)
+    """单个群的提醒名单人数上限。"""
+
+    hoyo_events_push_admin_only: bool = True
+    """是否只有群主/管理员能开关每日推送（False 时任何群友都能开）。"""

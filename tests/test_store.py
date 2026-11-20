@@ -108,3 +108,25 @@ def test_file_written_as_utf8_json(tmp_path):
 def test_scope_keys_are_independent(store: DataStore, scope):
     store.mark_done(scope, 100, ["a#1"])
     assert store.done_uids(scope, 100) == {"a#1"}
+
+
+def test_add_remove_player(store: DataStore):
+    assert store.add_player("g1", 100, "小明", added_by=100) is True
+    assert store.add_player("g1", 100, "小明", added_by=100) is False
+    assert store.player_count("g1") == 1
+    assert store.player("g1", 100)["nick"] == "小明"
+    assert store.remove_player("g1", 100) is True
+    assert store.remove_player("g1", 100) is False
+    assert store.player_count("g1") == 0
+
+
+def test_add_player_records_who_added_it(store: DataStore):
+    store.add_player("g1", 200, "小红", added_by=100)
+    assert store.player("g1", 200)["added_by"] == 100
+
+
+def test_auto_register_keeps_source(store: DataStore):
+    store.touch_player("g1", 100, "小明")
+    assert store.player("g1", 100)["source"] == "auto"
+    store.add_player("g1", 100, "小明", added_by=100)
+    assert store.player("g1", 100)["source"] == "auto"

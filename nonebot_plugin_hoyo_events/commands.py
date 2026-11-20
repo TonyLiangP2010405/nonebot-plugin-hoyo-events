@@ -19,6 +19,7 @@ from .formatter import (
     render_status,
     render_target_line,
     render_view,
+    render_watch_list,
 )
 from .games import GAME_BY_KEY, resolve_game
 from .jobs import group_push_time, push_group_once
@@ -66,6 +67,45 @@ def _context(event: MessageEvent) -> tuple:
     if isinstance(event, GroupMessageEvent):
         return build_scope_key(event.group_id), event.group_id
     return scope_of_private(int(event.get_user_id())), None
+
+
+MAX_WATCH_PER_COMMAND = 10
+
+
+def _mentioned_ids(event: MessageEvent) -> list:
+    """取出消息里 @ 到的人（忽略 @全体成员）。"""
+
+    result = []
+    for segment in event.get_message():
+        if segment.type != "at":
+            continue
+        qq = str(segment.data.get("qq", ""))
+        if not qq.isdigit():
+            continue
+        uid = int(qq)
+        if uid not in result:
+            result.append(uid)
+    return result
+
+
+async def _member_nick(bot: Bot, group_id: int, user_id: int) -> str:
+    """尽力拿群名片，拿不到就用 QQ 号占位。"""
+
+    try:
+        info = await bot.get_group_member_info(group_id=group_id, user_id=user_id)
+    except Exception:  # noqa: BLE001 - 协议端差异很大，拿不到不算错
+        return ""
+    if isinstance(info, dict):
+        return str(info.get("card") or info.get("nickname") or "")
+    return ""
+
+
+def _display_name(nick: str, user_id: int) -> str:
+    return nick or str(user_id)
+
+
+def _can_manage_push(event: MessageEvent) -> bool:
+    return _is_group_admin(event) or not config.hoyo_events_push_admin_only
 
 
 def _group_only_hint() -> str:
@@ -327,6 +367,172 @@ async def _handle_mute(event: MessageEvent, args: Message = CommandArg()) -> Non
     await mute_matcher.finish("已开启免打扰，之后不会再 @ 你。")
 
 
+# --------------------------------------------------------------------------- 提醒名单
+watch_matcher = on_command(
+    "活动关注",
+    aliases={"报名活动", "活动报名", "关注活动"},
+    priority=10,
+    block=True,
+)
+
+
+@watch_matcher.handle()
+async def _handle_watch(bot: Bot, event: MessageEvent) -> None:
+    """把自己或 @ 到的人加进本群提醒名单，不需要群管权限。"""
+
+    if not isinstance(event, GroupMessageEvent):
+        await watch_matcher.finish(_group_only_hint())
+
+    scope, group_id = _context(event)
+    actor = int(event.get_user_id())
+    await service.startup()
+
+    mentions = _mentioned_ids(event)
+    if len(mentions) > MAX_WATCH_PER_COMMAND:
+        await watch_matcher.finish(f"一次最多 @ {MAX_WATCH_PER_COMMAND} 个人哦，分批来。")
+
+    # 发起人默认也一起进名单；@ 到的人依次追加
+    targets = [actor] + [uid for uid in mentions if uid != actor]
+    others = [uid for uid in targets if uid != actor]
+    if others and not config.hoyo_events_allow_add_others:
+        await watch_matcher.finish("这个群只允许关注自己：直接发「活动关注」就行。")
+
+    current = store.player_count(scope)
+    fresh = [uid for uid in targets if not store.player(scope, uid)]
+    if current + len(fresh) > config.hoyo_events_max_watch:
+        await watch_matcher.finish(
+            f"本群提醒名单已满（{current}/{config.hoyo_events_max_watch} 人），"
+            "先发动「活动取关 @某人」腾个位置吧。"
+        )
+
+    added: list = []
+    existed: list = []
+    for uid in targets:
+        nick = _nick(event) if uid == actor else await _member_nick(bot, group_id, uid)
+        if store.add_player(scope, uid, nick, added_by=actor):
+            added.append((uid, nick))
+        else:
+            existed.append((uid, nick or store.player(scope, uid).get("nick", "")))
+    await store.commit()
+
+    total = store.player_count(scope)
+    lines = []
+    if added:
+        lines.append(f"✅ 已加入提醒名单 {len(added)} 人（本群共 {total} 人）")
+    if existed:
+        names = "、".join(_display_name(nick, uid) for uid, nick in existed)
+        lines.append(f"· 之前就在名单里：{names}")
+    if not added and not existed:
+        lines.append("· 名单没有变化")
+
+    message = Message(MessageSegment.text("\n".join(lines)))
+    if added:
+        message += MessageSegment.text("\n")
+        for uid, nick in added:
+            message += MessageSegment.text(f"· {_display_name(nick, uid)} ")
+            if uid != actor:  # 自己不用再 @ 一遍
+                message += MessageSegment.at(uid)
+            message += MessageSegment.text("\n")
+    message += MessageSegment.text(
+        "以后有没做完的活动会 @ 他们，做完的不会再 @。\n发送「活动名单」查看全部。"
+    )
+    await watch_matcher.send(message)
+
+
+unwatch_matcher = on_command(
+    "活动取关",
+    aliases={"取消关注", "退订活动", "活动退订"},
+    priority=10,
+    block=True,
+)
+
+
+@unwatch_matcher.handle()
+async def _handle_unwatch(event: MessageEvent) -> None:
+    if not isinstance(event, GroupMessageEvent):
+        await unwatch_matcher.finish(_group_only_hint())
+
+    scope, group_id = _context(event)
+    actor = int(event.get_user_id())
+    await service.startup()
+
+    mentions = _mentioned_ids(event)
+    targets = mentions or [actor]
+    if len(targets) > MAX_WATCH_PER_COMMAND:
+        await unwatch_matcher.finish(f"一次最多 @ {MAX_WATCH_PER_COMMAND} 个人哦。")
+
+    removed: list = []
+    denied: list = []
+    absent: list = []
+    for uid in targets:
+        record = store.player(scope, uid)
+        if not record:
+            absent.append(uid)
+            continue
+        if uid != actor:
+            added_by = record.get("added_by")
+            # 群管可以移除任何人；其他人只能移除「自己当初加进来的人」
+            if not (_is_group_admin(event) or str(added_by) == str(actor)):
+                denied.append((uid, record.get("nick", "")))
+                continue
+        store.remove_player(scope, uid)
+        removed.append((uid, record.get("nick", "")))
+    await store.commit()
+
+    lines = []
+    if removed:
+        names = "、".join(_display_name(nick, uid) for uid, nick in removed)
+        lines.append(f"✅ 已移出提醒名单：{names}")
+    if denied:
+        names = "、".join(_display_name(nick, uid) for uid, nick in denied)
+        lines.append(f"⚠️ 没权限移出别人：{names}（只有群管或当初加他的人可以）")
+    if absent:
+        lines.append("· 这些人本来就不在名单里")
+    if not lines:
+        lines.append("· 名单没有变化")
+    lines.append(f"本群当前共 {store.player_count(scope)} 人在名单里。")
+    await unwatch_matcher.finish("\n".join(lines))
+
+
+watchlist_matcher = on_command(
+    "活动名单",
+    aliases={"关注名单", "活动成员", "提醒名单"},
+    priority=10,
+    block=True,
+)
+
+
+@watchlist_matcher.handle()
+async def _handle_watchlist(event: MessageEvent) -> None:
+    if not isinstance(event, GroupMessageEvent):
+        await watchlist_matcher.finish(_group_only_hint())
+
+    scope, group_id = _context(event)
+    await service.startup()
+
+    players = store.players(scope)
+    muted = store.muted(group_id)
+    rows = []
+    for key in players:
+        try:
+            uid = int(key)
+        except (TypeError, ValueError):
+            continue
+        record = players.get(key) or {}
+        rows.append(
+            {
+                "uid": uid,
+                "nick": str(record.get("nick") or ""),
+                "pending": len(service.pending(scope, uid)),
+                "muted": uid in muted,
+            }
+        )
+    rows.sort(key=lambda row: (-row["pending"], row["uid"]))
+    await watchlist_matcher.finish(
+        render_watch_list(rows, len(service.active_activities()), config.hoyo_events_max_watch)
+    )
+
+
 # --------------------------------------------------------------------------- 提醒设置
 push_matcher = on_command(
     "活动提醒",
@@ -367,7 +573,7 @@ async def _handle_push_settings(
         )
 
     if action in {"开", "开启", "on", "启用"}:
-        if not _is_group_admin(event):
+        if not _can_manage_push(event):
             await push_matcher.finish(admin_only)
         store.update_group(group_id, enabled=True)
         await store.commit()
@@ -377,14 +583,14 @@ async def _handle_push_settings(
         )
 
     if action in {"关", "关闭", "off", "停用"}:
-        if not _is_group_admin(event):
+        if not _can_manage_push(event):
             await push_matcher.finish(admin_only)
         store.update_group(group_id, enabled=False)
         await store.commit()
         await push_matcher.finish("已关闭每日活动推送。")
 
     if action in {"时间", "定时", "time", "设置时间"}:
-        if not _is_group_admin(event):
+        if not _can_manage_push(event):
             await push_matcher.finish(admin_only)
         value = tokens[1] if len(tokens) > 1 else ""
         parsed = parse_push_time(value)
@@ -398,7 +604,7 @@ async def _handle_push_settings(
         )
 
     if action in {"立即", "马上", "now", "推送"}:
-        if not _is_group_admin(event):
+        if not _can_manage_push(event):
             await push_matcher.finish(admin_only)
         result = await push_group_once(group_id, bot=bot)
         if result:

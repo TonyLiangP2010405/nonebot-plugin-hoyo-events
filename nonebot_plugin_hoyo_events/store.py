@@ -143,14 +143,57 @@ class DataStore:
 
     # ------------------------------------------------------------------ 玩家
     def touch_player(self, scope: str, user_id: int, nick: str = "") -> None:
+        """用过命令就自动登记（不覆盖手动添加时记录的来源）。"""
+
         players = self._data["players"].setdefault(scope, {})
         record = players.get(str(user_id))
         if not isinstance(record, dict):
-            record = {"nick": "", "first_seen": iso(now())}
+            record = {"nick": "", "first_seen": iso(now()), "source": "auto"}
             players[str(user_id)] = record
         if nick:
             record["nick"] = nick
         record["last_seen"] = iso(now())
+
+    def add_player(
+        self,
+        scope: str,
+        user_id: int,
+        nick: str = "",
+        added_by: Optional[int] = None,
+        source: str = "manual",
+    ) -> bool:
+        """把某人加入提醒名单，返回是否为新加入。"""
+
+        players = self._data["players"].setdefault(scope, {})
+        key = str(user_id)
+        record = players.get(key)
+        created = not isinstance(record, dict)
+        if created:
+            record = {"nick": "", "first_seen": iso(now())}
+            players[key] = record
+            record["source"] = source
+        if nick:
+            record["nick"] = nick
+        record["last_seen"] = iso(now())
+        if added_by is not None:
+            record["added_by"] = int(added_by)
+        return created
+
+    def remove_player(self, scope: str, user_id: int) -> bool:
+        """把某人移出提醒名单，返回是否真的移除了。"""
+
+        players = self._data["players"].get(scope)
+        if not isinstance(players, dict):
+            return False
+        return players.pop(str(user_id), None) is not None
+
+    def player(self, scope: str, user_id: int) -> dict:
+        players = self._data["players"].get(scope) or {}
+        record = players.get(str(user_id)) if isinstance(players, dict) else None
+        return record if isinstance(record, dict) else {}
+
+    def player_count(self, scope: str) -> int:
+        return len(self.players(scope))
 
     def players(self, scope: str) -> dict:
         value = self._data["players"].get(scope)

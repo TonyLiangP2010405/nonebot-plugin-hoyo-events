@@ -20,6 +20,13 @@ class FakeBot(Bot):
 
     async def call_api(self, api: str, **data):  # noqa: ANN003
         self.sent.append((api, data))
+        if api == "get_group_member_info":
+            user_id = data.get("user_id")
+            return {
+                "user_id": user_id,
+                "nickname": f"用户{user_id}",
+                "card": f"群名片{user_id}",
+            }
         return {"message_id": 1000 + len(self.sent)}
 
     @property
@@ -38,7 +45,8 @@ def make_bot() -> FakeBot:
     return FakeBot(Adapter(nonebot.get_driver()))
 
 
-def group_event(text: str, user_id: int = 100, group_id: int = 888, role: str = "member"):
+def group_event(text, user_id: int = 100, group_id: int = 888, role: str = "member"):
+    message = text if isinstance(text, Message) else Message(text)
     return GroupMessageEvent(
         time=int(now().timestamp()),
         self_id=int(SELF_ID),
@@ -47,9 +55,9 @@ def group_event(text: str, user_id: int = 100, group_id: int = 888, role: str = 
         user_id=user_id,
         message_type="group",
         message_id=1,
-        message=Message(text),
-        original_message=Message(text),
-        raw_message=text,
+        message=message,
+        original_message=message,
+        raw_message=message.extract_plain_text(),
         font=0,
         sender=Sender(user_id=user_id, nickname=f"用户{user_id}", role=role),
         to_me=True,

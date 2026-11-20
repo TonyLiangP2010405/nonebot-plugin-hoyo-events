@@ -67,7 +67,7 @@ def test_render_push_with_targets():
     targets = [AtTarget(activity=activity, users=[100, 101], total=2)]
     payload = render_push(view, targets)
     assert payload.has_targets
-    assert "还没完成的群友" in payload.tail
+    assert "还没完成的群友" in payload.head
     assert "已完成 编号" in payload.tail
     line = render_target_line(targets[0])
     assert "幽境危战" in line and line.endswith("：")

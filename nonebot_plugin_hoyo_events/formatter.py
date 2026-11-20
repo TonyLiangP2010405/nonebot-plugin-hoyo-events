@@ -141,10 +141,13 @@ def render_push(
         overflow = (len(rest), merged)
         targets = targets[:max_at_lines]
 
-    tail_lines = []
+    # 「还没完成的群友」标题必须放在正文尾部（@ 名单之前），
+    # 因为正文和 @ 名单是分两段拼的
     if targets:
-        tail_lines.append(f"{LINE}\n还没完成的群友：")
-    elif no_player_hint:
+        head = f"{head}\n{LINE}\n还没完成的群友："
+
+    tail_lines = []
+    if not targets and no_player_hint:
         tail_lines.append(
             f"{LINE}\n还没有人登记活动进度，发送「活动」即可加入每日提醒（只 @ 未完成的人）。"
         )
@@ -198,6 +201,39 @@ def render_unmark(outcome, pending: int) -> str:
     return render_completion(outcome, pending, pending)
 
 
+def render_watch_list(rows: list, total_active: int, limit: int = 0) -> str:
+    """本群提醒名单。rows: [{uid, nick, pending, muted}]"""
+
+    if not rows:
+        return (
+            "📋 本群还没有人在提醒名单里。\n"
+            "发送「活动关注」把自己加进来，或者「活动关注 @某人」把队友一起加上。"
+        )
+
+    lines = [f"📋 本群提醒名单（{len(rows)} 人 · 进行中活动 {total_active} 个）", LINE]
+    for index, row in enumerate(rows[:30], start=1):
+        name = _display(row)
+        if row.get("muted"):
+            tail = "已免打扰"
+        elif row.get("pending") == 0:
+            tail = "全部完成 ✅"
+        else:
+            tail = f"未完成 {row['pending']}"
+        lines.append(f" {index}. {_clip(name, 14)} · {tail}")
+    if len(rows) > 30:
+        lines.append(f" …还有 {len(rows) - 30} 人")
+    lines.append(LINE)
+    if limit:
+        lines.append(f"名单上限 {limit} 人 · 发送「活动关注 @某人」加人，「活动取关」退出")
+    else:
+        lines.append("发送「活动关注 @某人」加人，「活动取关」退出")
+    return "\n".join(lines)
+
+
+def _display(row: dict) -> str:
+    return str(row.get("nick") or row.get("uid") or "")
+
+
 def render_help(push_time: str, remind_days: int) -> str:
     return "\n".join(
         [
@@ -216,7 +252,13 @@ def render_help(push_time: str, remind_days: int) -> str:
             " · 取消完成 1 —— 撤销标记",
             " · 未完成 —— 查看自己还差哪些",
             "",
-            "【提醒设置（群管）】",
+            "【提醒名单（谁都能用）】",
+            " · 活动关注 —— 把自己加进提醒名单",
+            " · 活动关注 @小明 @小红 —— 把别人也加进来（不需要群管）",
+            " · 活动取关 [@小明] —— 退出名单 / 移除自己加的人",
+            " · 活动名单 —— 看看本群谁在名单里、还差几个活动",
+            "",
+            "【提醒设置】",
             " · 活动提醒 开 / 关 —— 开关每日推送",
             f" · 活动提醒 时间 21:30 —— 设置推送时间（默认 {push_time}）",
             " · 活动提醒 状态 —— 查看当前设置",
