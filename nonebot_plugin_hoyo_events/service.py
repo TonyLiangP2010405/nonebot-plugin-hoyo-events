@@ -129,13 +129,17 @@ class ActivityService:
         at: Optional[datetime] = None,
         only_pending: bool = False,
         group_id: Optional[int] = None,
+        *,
+        only_completed: bool = False,
     ) -> View:
         at = at or now()
         max_events = self.settings.group(group_id).max_events
         activities = self.active_activities(game, at)
 
         done = self.store.done_uids(scope, user_id) if scope else set()
-        if only_pending:
+        if only_completed:
+            activities = [act for act in activities if act.uid in done]
+        elif only_pending:
             activities = [act for act in activities if act.uid not in done]
 
         # 每个游戏最多展示 N 条
@@ -152,9 +156,10 @@ class ActivityService:
         for index, activity in enumerate(limited, start=1):
             view.entries.append(Entry(index=index, activity=activity, done=activity.uid in done))
 
-        upcoming = self.upcoming_activities(game, at, within_days=3)
-        shown = {entry.activity.uid for entry in view.entries}
-        view.upcoming = [act for act in upcoming if act.uid not in shown][:6]
+        if not only_completed:
+            upcoming = self.upcoming_activities(game, at, within_days=3)
+            shown = {entry.activity.uid for entry in view.entries}
+            view.upcoming = [act for act in upcoming if act.uid not in shown][:6]
 
         for key in GAME_KEYS:
             if not any(entry.activity.game == key for entry in view.entries):
@@ -229,6 +234,8 @@ class ActivityService:
         user_id: int,
         at: Optional[datetime] = None,
         view_keys: tuple = (),
+        *,
+        list_command: str = "活动",
     ) -> CompletionOutcome:
         """把「已完成 1 2 幽境危战 原神 全部」这类输入解析成活动列表。"""
 
@@ -261,7 +268,7 @@ class ActivityService:
                 activity = self.view_by_index(index, *view_keys)
                 if not activity:
                     outcome.errors.append(
-                        f"找不到第 {index} 项（列表编号已过期，请重新发「活动」）"
+                        f"找不到第 {index} 项，请重新发送「{list_command}」查看编号"
                     )
                 elif activity.is_over(at):
                     outcome.errors.append(f"{activity.name} 已经结束了")
@@ -321,11 +328,17 @@ class ActivityService:
         tokens: list,
         view_keys: tuple = (),
     ) -> CompletionOutcome:
-        outcome = self.resolve_tokens(tokens, scope, user_id, view_keys=view_keys)
+        outcome = self.resolve_tokens(
+            tokens, scope, user_id, view_keys=view_keys, list_command="取消完成"
+        )
         if outcome.matched:
             uids = [act.uid for act in outcome.matched]
             outcome.removed = self.store.unmark_done(scope, user_id, uids)
-            await self.store.commit()
+            if outcome.removed:
+                await self.store.commit()
+            else:
+                outcome.matched.clear()
+                outcome.errors.append("这些活动没有标记完成。发送「取消完成」查看可撤销的活动。")
         return outcome
 
     def pending(self, scope: str, user_id: int, at: Optional[datetime] = None) -> list:

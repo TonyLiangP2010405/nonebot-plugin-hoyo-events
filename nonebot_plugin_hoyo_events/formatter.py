@@ -239,7 +239,7 @@ def render_completion(outcome, scope_pending: int, scope_total: int) -> str:
                 left = activity.days_left()
                 lines.append(f" · {_clip(activity.name, 20)}（还剩 {left} 天）")
     elif outcome.removed:
-        lines.append(f"↩️ 已取消 {len(outcome.removed)} 个活动的完成标记")
+        lines.append(f"↩️ 已取消 {len(outcome.removed)} 个活动的完成标记，已移回未完成列表")
         for activity in outcome.matched:
             if activity.uid in outcome.removed:
                 lines.append(f" · {_clip(activity.name, 20)}")
@@ -256,6 +256,8 @@ def render_completion(outcome, scope_pending: int, scope_total: int) -> str:
             lines.append("发送「未完成」查看还差哪些。")
         else:
             lines.append("全部活动都完成啦，后续不会再 @ 你 🎉")
+    if outcome.newly:
+        lines.append("标错了？发送「取消完成」查看可撤销的活动和编号。")
     return "\n".join(lines).strip()
 
 
@@ -361,7 +363,8 @@ def render_help(push_time: str, remind_days: int, status_line: str = "") -> str:
         " · 已完成 幽境危战     按名字（可模糊）",
         " · 已完成 全部        一键全完成",
         " · 未完成            我还差哪些",
-        " · 取消完成 1        点错了撤销",
+        " · 取消完成          查看可撤销的活动",
+        " · 取消完成 1        按编号撤销完成",
         "",
         "【提醒名单】",
         " · 活动关注          自己进名单",

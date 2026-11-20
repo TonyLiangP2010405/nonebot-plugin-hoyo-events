@@ -1,6 +1,6 @@
 [project]
 name = "nonebot-plugin-hoyo-events"
-version = "0.4.0"
+version = "0.4.1"
 description = "原神 / 崩坏：星穹铁道 / 绝区零 活动日历与未完成提醒 NoneBot2 插件"
 readme = "README.md"
 license = "MIT"

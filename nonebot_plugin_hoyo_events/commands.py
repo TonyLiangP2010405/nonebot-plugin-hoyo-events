@@ -380,16 +380,29 @@ async def _handle_undo(event: MessageEvent, args: Message = CommandArg()) -> Non
     user_id = int(event.get_user_id())
     await _prepare()
 
-    tokens = _split_tokens(args.extract_plain_text())
-    if not tokens:
-        await undo_matcher.finish("用法：取消完成 编号 / 活动名，例如「取消完成 1」")
+    if not service.has_data():
+        await undo_matcher.finish("😵 暂时拿不到活动数据，晚点再试试。")
 
-    view_keys = (build_view_key(group_id, user_id), build_scope_key(group_id))
+    tokens = _split_tokens(args.extract_plain_text())
+    view_key = build_view_key(group_id, user_id)
+    if not tokens:
+        view = service.build_view(scope=scope, user_id=user_id, group_id=group_id, only_completed=True)
+        if not view.entries:
+            await undo_matcher.finish("你目前没有可撤销的完成记录。")
+        message = await build_activity_message(
+            view,
+            remind_days=service.group_settings(group_id).remind_days,
+            title="你已完成的活动",
+            footer="发送「取消完成 编号」恢复未完成，例如：取消完成 1\n也可以直接输入活动名。",
+        )
+        service.remember_view(view_key, view)
+        await undo_matcher.finish(message)
+
+    view_keys = (view_key, build_scope_key(group_id))
     outcome = await service.unmark_completed(scope, user_id, tokens, view_keys=view_keys)
-    pending = len(service.pending(scope, user_id))
-    _, total = service.done_count(scope, user_id)
+    done, total = service.done_count(scope, user_id)
     await undo_matcher.finish(
-        await build_text_card_message(render_completion(outcome, pending, total))
+        await build_text_card_message(render_completion(outcome, total - done, total))
     )
 
 

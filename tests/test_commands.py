@@ -94,6 +94,36 @@ async def test_undo_command(bot, offline):
 
 
 @pytest.mark.asyncio
+async def test_undo_list_restores_the_right_activity_after_viewing_pending(bot, offline):
+    store.mark_done("g888", 200, ["ys.b#1"])
+    await handle_event(bot, group_event("/活动"))
+    await handle_event(bot, group_event("/已完成 2"))
+    assert "标错了" in bot.last_text
+
+    await handle_event(bot, group_event("/未完成"))
+    assert "砺行修远" not in bot.last_text
+    await handle_event(bot, group_event("/取消完成"))
+    assert "你已完成的活动" in bot.last_text
+    assert "1. 砺行修远" in bot.last_text
+    assert "幽境危战" not in bot.last_text
+
+    await handle_event(bot, group_event("/取消完成 1"))
+    assert "已移回未完成列表" in bot.last_text
+    assert store.done_uids("g888", 100) == set()
+    assert store.done_uids("g888", 200) == {"ys.b#1"}
+    await handle_event(bot, group_event("/未完成"))
+    assert "砺行修远" in bot.last_text
+
+
+@pytest.mark.asyncio
+async def test_undo_pending_activity_reports_that_there_is_nothing_to_undo(bot, offline):
+    store.mark_done("g888", 100, ["ys.b#1"])
+    await handle_event(bot, group_event("/取消完成 幽境危战"))
+    assert "没有标记完成" in bot.last_text
+    assert store.done_uids("g888", 100) == {"ys.b#1"}
+
+
+@pytest.mark.asyncio
 async def test_private_list(bot, offline):
     await handle_event(bot, private_event("/活动"))
     assert bot.sent
