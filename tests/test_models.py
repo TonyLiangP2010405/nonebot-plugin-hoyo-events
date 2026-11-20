@@ -22,7 +22,8 @@ def test_parse_datetime_iso():
 def test_parse_datetime_timezone_and_z():
     dt = parse_datetime("2026-11-20T03:00:00Z")
     assert dt is not None
-    assert dt.astimezone().hour == 11
+    # 统一转成 UTC+8，与运行机器的本地时区无关
+    assert dt.hour == 11
     dt2 = parse_datetime("2026-11-20T11:00:00+08:00")
     assert dt2 == dt
 

@@ -9,7 +9,9 @@ from nonebot_plugin_hoyo_events.runtime import OVERRIDE_PATH, parse_push_time, s
 
 def test_plugin_is_loaded():
     plugin = nonebot.get_plugin("nonebot_plugin_hoyo_events")
-    assert plugin is not None
+    if plugin is None:
+        loaded = sorted(p.module_name for p in nonebot.get_loaded_plugins())
+        raise AssertionError(f"插件未注册，已加载的插件：{loaded}")
     assert plugin.metadata is not None
     assert plugin.metadata.name == "米哈游活动助手"
     assert "~onebot.v11" in plugin.metadata.supported_adapters
