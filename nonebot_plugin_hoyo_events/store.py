@@ -28,6 +28,7 @@ def default_data() -> dict:
         "completions": {},
         "players": {},
         "groups": {},
+        "settings": {},
         "meta": {},
     }
 
@@ -81,10 +82,37 @@ class DataStore:
             if key in raw and isinstance(raw[key], type(value)):
                 merged[key] = raw[key]
         # 兼容旧版本：缺失字段时补默认值
-        for section in ("snapshots", "registry", "completions", "players", "groups", "meta"):
+        for section in (
+            "snapshots",
+            "registry",
+            "completions",
+            "players",
+            "groups",
+            "settings",
+            "meta",
+        ):
             if not isinstance(merged.get(section), dict):
                 merged[section] = {}
         self._data = merged
+        self._migrate()
+
+    def _migrate(self) -> None:
+        """把旧版本的群字段（enabled/hour/minute）迁移成命令式配置字段。"""
+
+        for record in self._data.get("groups", {}).values():
+            if not isinstance(record, dict):
+                continue
+            if "push_time" not in record and ("hour" in record or "minute" in record):
+                try:
+                    hour = int(record.get("hour", 21) or 0)
+                    minute = int(record.get("minute", 0) or 0)
+                except (TypeError, ValueError):
+                    hour, minute = 21, 0
+                record["push_time"] = f"{hour:02d}:{minute:02d}"
+            if "push_enabled" not in record and "enabled" in record:
+                record["push_enabled"] = bool(record["enabled"])
+            for old_key in ("hour", "minute", "enabled"):
+                record.pop(old_key, None)
 
     async def commit(self) -> None:
         async with self._io_lock:
@@ -266,7 +294,7 @@ class DataStore:
         groups = self._data["groups"]
         record = groups.get(str(group_id))
         if not isinstance(record, dict):
-            record = {"enabled": False, "hour": 21, "minute": 0, "last_push": "", "muted": []}
+            record = {"muted": []}
             groups[str(group_id)] = record
         for key, value in fields.items():
             record[key] = value

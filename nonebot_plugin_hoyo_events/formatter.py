@@ -234,6 +234,54 @@ def _display(row: dict) -> str:
     return str(row.get("nick") or row.get("uid") or "")
 
 
+def render_settings(rows: list, global_rows: list, push_time: str = "") -> str:
+    """rows: [(label, value_text, is_custom, hint)]"""
+
+    lines = ["⚙️ 本群活动设置", LINE]
+    for label, value, custom, _hint in rows:
+        mark = "（已改）" if custom else ""
+        lines.append(f" · {label}：{value}{mark}")
+
+    if global_rows:
+        lines.append("")
+        lines.append("🌐 全局设置（超管）")
+        for label, value, custom, _hint in global_rows:
+            mark = "（已改）" if custom else ""
+            lines.append(f" · {label}：{value}{mark}")
+
+    lines.append(LINE)
+    if push_time:
+        lines.append(f"当前推送时间：{push_time}")
+    lines.append("改法：活动设置 <项> <值>，例如「活动设置 时间 21:30」")
+    lines.append("全部可改项：活动设置 帮助")
+    return "\n".join(lines)
+
+
+def render_settings_help(rows: list) -> str:
+    """rows: [(label, kind_hint, hint, aliases)]"""
+
+    kind_hint = {
+        "bool": "开/关",
+        "int": "数字",
+        "time": "21:30",
+        "choice": "群管/所有人",
+        "url": "https://…",
+    }
+    lines = ["⚙️ 可以这样改设置", LINE]
+    for label, kind, hint, aliases in rows:
+        alias_text = " / ".join(aliases[:2]) if aliases else label
+        value_hint = kind_hint.get(kind, "值")
+        suffix = f"，{hint}" if hint else ""
+        lines.append(f" · {label}（{alias_text}，填 {value_hint}{suffix}）")
+    lines.append(LINE)
+    lines.append("例子：")
+    lines.append(" 活动设置 推送 开")
+    lines.append(" 活动设置 时间 21:30")
+    lines.append(" 活动设置 加急天数 5")
+    lines.append(" 活动设置 权限 所有人")
+    return "\n".join(lines)
+
+
 def render_help(push_time: str, remind_days: int) -> str:
     return "\n".join(
         [
@@ -258,10 +306,13 @@ def render_help(push_time: str, remind_days: int) -> str:
             " · 活动取关 [@小明] —— 退出名单 / 移除自己加的人",
             " · 活动名单 —— 看看本群谁在名单里、还差几个活动",
             "",
-            "【提醒设置】",
-            " · 活动提醒 开 / 关 —— 开关每日推送",
-            f" · 活动提醒 时间 21:30 —— 设置推送时间（默认 {push_time}）",
-            " · 活动提醒 状态 —— 查看当前设置",
+            "【提醒设置（命令改，不用改配置文件）】",
+            " · 活动设置 —— 查看本群所有设置",
+            " · 活动设置 推送 开|关 —— 开关每日推送",
+            f" · 活动设置 时间 21:30 —— 推送时间（默认 {push_time}）",
+            " · 活动设置 加急天数 3 —— 几天内标 ⏰",
+            " · 活动设置 权限 群管|所有人 —— 谁能改设置、开推送",
+            " · 活动设置 帮助 —— 所有可改项",
             " · 活动提醒 立即 —— 立刻推送一次",
             " · 活动免打扰 —— 自己不再被 @",
             "",
@@ -300,6 +351,8 @@ def render_status(
 
 __all__ = [
     "PushMessage",
+    "render_settings",
+    "render_settings_help",
     "render_completion",
     "render_help",
     "render_push",

@@ -18,6 +18,7 @@ from .models import (
     now,
     parse_datetime,
 )
+from .settings import GroupSettings, SettingsResolver
 from .store import DataStore
 
 logger = logging.getLogger("nonebot_plugin_hoyo_events")
@@ -55,18 +56,29 @@ class AtTarget:
 class ActivityService:
     """业务逻辑：列表、完成状态、@ 目标、推送。"""
 
-    def __init__(self, store: DataStore, source: ActivitySource, config: Config) -> None:
+    def __init__(
+        self,
+        store: DataStore,
+        source: ActivitySource,
+        config: Config,
+        settings: Optional[SettingsResolver] = None,
+    ) -> None:
         self.store = store
         self.source = source
         self.config = config
+        self.settings = settings or SettingsResolver(store, config)
         self._views: dict = {}
         self._started = False
+
+    def group_settings(self, group_id: Optional[int]) -> GroupSettings:
+        return self.settings.group(group_id)
 
     # ------------------------------------------------------------------ 启动
     async def startup(self) -> None:
         if self._started:
             return
         await self.store.load()
+        self.settings.apply_to_source(self.source)
         self._started = True
 
     async def ensure_data(self, force: bool = False) -> dict:
@@ -116,8 +128,10 @@ class ActivityService:
         user_id: int = 0,
         at: Optional[datetime] = None,
         only_pending: bool = False,
+        group_id: Optional[int] = None,
     ) -> View:
         at = at or now()
+        max_events = self.settings.group(group_id).max_events
         activities = self.active_activities(game, at)
 
         done = self.store.done_uids(scope, user_id) if scope else set()
@@ -129,7 +143,7 @@ class ActivityService:
         per_game: dict = {}
         for activity in activities:
             count = per_game.get(activity.game, 0)
-            if count >= self.config.hoyo_events_max_events:
+            if count >= max_events:
                 continue
             per_game[activity.game] = count + 1
             limited.append(activity)
@@ -338,6 +352,7 @@ class ActivityService:
         players = self.store.players(scope)
         if not players:
             return []
+        max_users = self.settings.group(group_id).max_at_users
         muted = self.store.muted(group_id) if group_id is not None else set()
         targets = []
         for activity in activities:
@@ -358,7 +373,7 @@ class ActivityService:
             targets.append(
                 AtTarget(
                     activity=activity,
-                    users=missing[: self.config.hoyo_events_max_at_users],
+                    users=missing[:max_users],
                     total=total,
                 )
             )

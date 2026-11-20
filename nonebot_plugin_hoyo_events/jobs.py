@@ -9,8 +9,8 @@ from nonebot.adapters.onebot.v11 import Bot
 
 from .formatter import render_push
 from .messaging import build_push_message
-from .models import fmt_md, now
-from .runtime import config, default_push_time, service, store
+from .models import fmt_md, now, parse_datetime
+from .runtime import default_push_time, service, store
 from .service import build_scope_key
 
 logger = logging.getLogger("nonebot_plugin_hoyo_events")
@@ -30,7 +30,8 @@ def build_group_push(group_id: int) -> Optional[object]:
     """构造某个群的推送消息，没有活动时返回 None。"""
 
     scope = build_scope_key(group_id)
-    view = service.build_view(None, scope, 0)
+    current = service.group_settings(group_id)
+    view = service.build_view(None, scope, 0, group_id=group_id)
     if not view.entries:
         return None
 
@@ -40,9 +41,9 @@ def build_group_push(group_id: int) -> Optional[object]:
     payload = render_push(
         view,
         targets,
-        remind_days=config.hoyo_events_remind_days,
+        remind_days=current.remind_days,
         no_player_hint=not store.players(scope),
-        max_at_lines=config.hoyo_events_max_at_lines,
+        max_at_lines=current.max_at_lines,
     )
     return payload
 
@@ -95,14 +96,17 @@ async def push_due_groups(current: Optional[datetime] = None) -> list:
     pushed = []
 
     for group_key, record in list(store.all_groups().items()):
-        if not isinstance(record, dict) or not record.get("enabled"):
+        if not isinstance(record, dict):
             continue
         try:
             group_id = int(group_key)
         except (TypeError, ValueError):
             continue
 
-        hour, minute = group_push_time(record)
+        current_settings = service.settings.group(group_id)
+        if not current_settings.push_enabled:
+            continue
+        hour, minute = current_settings.hour, current_settings.minute
         if (current.hour, current.minute) < (hour, minute):
             continue
 
@@ -143,35 +147,35 @@ async def refresh_all(force: bool = True) -> dict:
     return await service.ensure_data(force=force)
 
 
+async def refresh_if_due(current: Optional[datetime] = None) -> bool:
+    """按「刷新分钟」设置决定这次要不要拉数据（设置改了立刻生效）。"""
+
+    await service.startup()
+    interval = service.settings.global_settings().refresh_interval
+    if interval <= 0:
+        return False
+    current = current or now()
+    last = parse_datetime(store.meta("last_refresh"))
+    if last and (current - last).total_seconds() < interval * 60 - 5:
+        return False
+    await service.ensure_data(force=True)
+    return True
+
+
 def register_jobs(scheduler) -> None:  # noqa: ANN001 - apscheduler 实例
-    interval = config.hoyo_events_refresh_interval
-    if interval > 0:
-
-        @scheduler.scheduled_job(
-            "interval",
-            minutes=interval,
-            id="hoyo_events_refresh",
-            coalesce=True,
-            max_instances=1,
-            misfire_grace_time=300,
-        )
-        async def _refresh_job() -> None:
-            try:
-                results = await refresh_all(force=True)
-                if results:
-                    logger.debug("活动数据刷新完成：%s 条", len(results))
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("定时刷新活动数据失败：%s", exc)
-
     @scheduler.scheduled_job(
         "interval",
         minutes=1,
-        id="hoyo_events_push",
+        id="hoyo_events_tick",
         coalesce=True,
         max_instances=1,
         misfire_grace_time=120,
     )
-    async def _push_job() -> None:
+    async def _tick_job() -> None:
+        try:
+            await refresh_if_due()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("定时刷新活动数据失败：%s", exc)
         try:
             await push_due_groups()
         except Exception as exc:  # noqa: BLE001

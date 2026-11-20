@@ -12,6 +12,7 @@ from nonebot_plugin_localstore import get_plugin_data_dir
 from .config import Config
 from .datasource import ActivitySource
 from .service import ActivityService
+from .settings import SettingsResolver
 from .store import DataStore
 
 logger = logging.getLogger("nonebot_plugin_hoyo_events")
@@ -64,7 +65,8 @@ source = ActivitySource(
     ttl=config.hoyo_events_cache_ttl,
     override_path=OVERRIDE_PATH,
 )
-service = ActivityService(store=store, source=source, config=config)
+settings = SettingsResolver(store=store, config=config)
+service = ActivityService(store=store, source=source, config=config, settings=settings)
 
 
 def parse_push_time(text: str) -> Optional[tuple]:
@@ -92,6 +94,7 @@ def default_push_time() -> tuple:
 
 __all__ = [
     "config",
+    "settings",
     "DATA_DIR",
     "OVERRIDE_PATH",
     "STORE_PATH",

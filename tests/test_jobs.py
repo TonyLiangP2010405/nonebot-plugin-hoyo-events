@@ -68,7 +68,7 @@ async def test_push_skips_users_who_finished_everything(bot, offline):
 
 @pytest.mark.asyncio
 async def test_push_due_groups_once_per_day(bot, offline, monkeypatch):
-    store.update_group(888, enabled=True, hour=0, minute=0)
+    store.update_group(888, push_enabled=True, push_time="00:00")
     store.touch_player("g888", 100, "小明")
     monkeypatch.setattr(jobs, "_bots", lambda: [bot])
     monkeypatch.setattr(jobs, "push_group_once", _fake_push(bot))
@@ -83,7 +83,7 @@ async def test_push_due_groups_once_per_day(bot, offline, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_push_due_groups_respects_time(bot, offline, monkeypatch):
-    store.update_group(888, enabled=True, hour=23, minute=59)
+    store.update_group(888, push_enabled=True, push_time="23:59")
     store.touch_player("g888", 100, "小明")
     monkeypatch.setattr(jobs, "push_group_once", _fake_push(bot))
 
@@ -95,14 +95,14 @@ async def test_push_due_groups_respects_time(bot, offline, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_push_due_groups_disabled(bot, offline, monkeypatch):
-    store.update_group(888, enabled=False)
+    store.update_group(888, push_enabled=False)
     monkeypatch.setattr(jobs, "push_group_once", _fake_push(bot))
     assert await jobs.push_due_groups(now()) == []
 
 
 @pytest.mark.asyncio
 async def test_push_retries_then_gives_up(bot, offline, monkeypatch):
-    store.update_group(888, enabled=True, hour=0, minute=0)
+    store.update_group(888, push_enabled=True, push_time="00:00")
     store.touch_player("g888", 100, "小明")
 
     async def fail(group_id, bot=None):

@@ -22,17 +22,27 @@ from .formatter import (
     render_watch_list,
 )
 from .games import GAME_BY_KEY, resolve_game
-from .jobs import group_push_time, push_group_once
+from .jobs import push_group_once
 from .messaging import plain_message
 from .models import fmt_md
-from .runtime import config, default_push_time, parse_push_time, service, store
+from .runtime import parse_push_time, service, store
 from .service import build_scope_key, build_view_key, scope_of_private
+from .settings import (
+    coerce_option,
+    find_global_option,
+    find_group_option,
+    format_clock,
+    format_value,
+)
 
 logger = logging.getLogger("nonebot_plugin_hoyo_events")
 
 QUEUE = "活动"
 
-admin_only = "只有群主/管理员或超级用户才能修改提醒设置哦"
+admin_only = (
+    "只有群主/管理员或超级用户才能改这些设置哦。\n"
+    "（不想每次都找群管的话，让超管发一次「活动设置 权限 所有人」，之后大家都能改）"
+)
 superuser_only = "这是管理员指令哦"
 
 
@@ -104,8 +114,12 @@ def _display_name(nick: str, user_id: int) -> str:
     return nick or str(user_id)
 
 
-def _can_manage_push(event: MessageEvent) -> bool:
-    return _is_group_admin(event) or not config.hoyo_events_push_admin_only
+def _can_manage(event: MessageEvent, group_id: int) -> bool:
+    """群管、超管，或者被设成「所有人可改」时，任何群友都能改。"""
+
+    if _is_group_admin(event):
+        return True
+    return not service.settings.group(group_id).push_admin_only
 
 
 def _group_only_hint() -> str:
@@ -128,9 +142,11 @@ help_matcher = on_command(
 
 
 @help_matcher.handle()
-async def _handle_help() -> None:
-    push_time = f"{default_push_time()[0]:02d}:{default_push_time()[1]:02d}"
-    await help_matcher.finish(render_help(push_time, config.hoyo_events_remind_days))
+async def _handle_help(event: MessageEvent) -> None:
+    await service.startup()
+    group_id = event.group_id if isinstance(event, GroupMessageEvent) else None
+    current = service.group_settings(group_id)
+    await help_matcher.finish(render_help(current.push_time, current.remind_days))
 
 
 # --------------------------------------------------------------------------- 查询活动
@@ -138,7 +154,9 @@ async def _send_list(matcher, event: MessageEvent, text: str) -> None:
     await _prepare()
 
     game = None
-    force_at = config.hoyo_events_list_at
+    force_at = service.group_settings(
+        event.group_id if isinstance(event, GroupMessageEvent) else None
+    ).list_at
     for token in _split_tokens(text):
         if token.lower() in {"提醒", "@", "at", "艾特", "ping"}:
             force_at = True
@@ -159,11 +177,13 @@ async def _send_list(matcher, event: MessageEvent, text: str) -> None:
     scope, group_id = _context(event)
     user_id = int(event.get_user_id())
     store.touch_player(scope, user_id, _nick(event))
-    if group_id and config.hoyo_events_push_default_enabled and not store.group(group_id):
-        hour, minute = default_push_time()
-        store.update_group(group_id, enabled=True, hour=hour, minute=minute)
+    if group_id and not store.group(group_id):
+        current = service.group_settings(group_id)
+        if current.push_enabled:  # 只在默认值就是「开」时才落一条记录
+            service.settings.set_group(group_id, "push_enabled", True)
+            service.settings.set_group(group_id, "push_time", current.push_time)
 
-    view = service.build_view(game, scope, user_id)
+    view = service.build_view(game, scope, user_id, group_id=group_id)
     service.remember_view(build_view_key(group_id, user_id), view)
     await store.commit()
 
@@ -178,7 +198,7 @@ async def _send_list(matcher, event: MessageEvent, text: str) -> None:
 
     body = render_view(
         view,
-        remind_days=config.hoyo_events_remind_days,
+        remind_days=service.group_settings(group_id).remind_days,
         title=title,
         footer="发送「已完成 编号」标记完成，如：已完成 1 3",
     )
@@ -249,7 +269,7 @@ async def _handle_done(event: MessageEvent, args: Message = CommandArg()) -> Non
     view_keys = (build_view_key(group_id, user_id), build_scope_key(group_id))
 
     if not tokens:
-        view = service.build_view(None, scope, user_id, only_pending=True)
+        view = service.build_view(None, scope, user_id, only_pending=True, group_id=group_id)
         if not view.entries:
             await done_matcher.finish("🎉 你没有未完成的活动，不会再 @ 你啦。")
         service.remember_view(build_view_key(group_id, user_id), view)
@@ -257,7 +277,7 @@ async def _handle_done(event: MessageEvent, args: Message = CommandArg()) -> Non
         await done_matcher.finish(
             render_view(
                 view,
-                remind_days=config.hoyo_events_remind_days,
+                remind_days=service.group_settings(group_id).remind_days,
                 title="📌 你还没完成的活动",
                 footer="发送「已完成 编号」标记，例如：已完成 1 3\n也可以「已完成 全部」一键完成。",
             )
@@ -287,7 +307,7 @@ async def _handle_todo(event: MessageEvent) -> None:
     user_id = int(event.get_user_id())
     await _prepare()
 
-    view = service.build_view(None, scope, user_id, only_pending=True)
+    view = service.build_view(None, scope, user_id, only_pending=True, group_id=group_id)
     if not view.entries:
         await todo_matcher.finish("🎉 当前没有未完成的活动，全部搞定啦！")
     service.remember_view(build_view_key(group_id, user_id), view)
@@ -297,7 +317,7 @@ async def _handle_todo(event: MessageEvent) -> None:
     await todo_matcher.finish(
         render_view(
             view,
-            remind_days=config.hoyo_events_remind_days,
+            remind_days=service.group_settings(group_id).remind_days,
             title=f"📌 你还没完成的活动（{done_count}/{total}）",
             footer="发送「已完成 编号」标记，例如：已完成 1 3",
         )
@@ -394,14 +414,15 @@ async def _handle_watch(bot: Bot, event: MessageEvent) -> None:
     # 发起人默认也一起进名单；@ 到的人依次追加
     targets = [actor] + [uid for uid in mentions if uid != actor]
     others = [uid for uid in targets if uid != actor]
-    if others and not config.hoyo_events_allow_add_others:
+    group_settings = service.group_settings(group_id)
+    if others and not group_settings.allow_add_others:
         await watch_matcher.finish("这个群只允许关注自己：直接发「活动关注」就行。")
 
     current = store.player_count(scope)
     fresh = [uid for uid in targets if not store.player(scope, uid)]
-    if current + len(fresh) > config.hoyo_events_max_watch:
+    if current + len(fresh) > group_settings.max_watch:
         await watch_matcher.finish(
-            f"本群提醒名单已满（{current}/{config.hoyo_events_max_watch} 人），"
+            f"本群提醒名单已满（{current}/{group_settings.max_watch} 人），"
             "先发动「活动取关 @某人」腾个位置吧。"
         )
 
@@ -529,7 +550,9 @@ async def _handle_watchlist(event: MessageEvent) -> None:
         )
     rows.sort(key=lambda row: (-row["pending"], row["uid"]))
     await watchlist_matcher.finish(
-        render_watch_list(rows, len(service.active_activities()), config.hoyo_events_max_watch)
+        render_watch_list(
+            rows, len(service.active_activities()), service.group_settings(group_id).max_watch
+        )
     )
 
 
@@ -546,73 +569,139 @@ push_matcher = on_command(
 async def _handle_push_settings(
     bot: Bot, event: MessageEvent, args: Message = CommandArg()
 ) -> None:
-    tokens = _split_tokens(args.extract_plain_text())
-    action = tokens[0] if tokens else "状态"
-
     if not isinstance(event, GroupMessageEvent):
         await push_matcher.finish(_group_only_hint())
 
+    await service.startup()
+    tokens = _split_tokens(args.extract_plain_text())
+    action = tokens[0] if tokens else "状态"
     group_id = event.group_id
-    record = store.group(group_id)
-    enabled = bool(record.get("enabled"))
-    hour, minute = group_push_time(record)
-    push_time = f"{hour:02d}:{minute:02d}"
+    current = service.settings.group(group_id)
 
     if action in {"状态", "查看", "info", "status"}:
-        total_active = len(service.active_activities())
-        muted = int(event.get_user_id()) in store.muted(group_id)
         await push_matcher.finish(
             render_status(
-                enabled=enabled,
-                push_time=push_time,
-                players=len(store.players(build_scope_key(group_id))),
+                enabled=current.push_enabled,
+                push_time=current.push_time,
+                players=store.player_count(build_scope_key(group_id)),
                 data_status=service.data_status(),
-                total_active=total_active,
-                muted=muted,
+                total_active=len(service.active_activities()),
+                muted=int(event.get_user_id()) in store.muted(group_id),
             )
         )
 
+    if not _can_manage(event, group_id):
+        await push_matcher.finish(admin_only)
+
     if action in {"开", "开启", "on", "启用"}:
-        if not _can_manage_push(event):
-            await push_matcher.finish(admin_only)
-        store.update_group(group_id, enabled=True)
+        service.settings.set_group(group_id, "push_enabled", True)
         await store.commit()
         await push_matcher.finish(
-            f"✅ 已开启每日活动推送，每天 {push_time} 播报并 @ 未完成的群友。\n"
-            "发送「活动提醒 时间 22:00」可以改时间。"
+            f"✅ 已开启每日活动推送，每天 {current.push_time} 播报并 @ 未完成的群友。\n"
+            "发送「活动设置 时间 22:00」可以改时间。"
         )
 
     if action in {"关", "关闭", "off", "停用"}:
-        if not _can_manage_push(event):
-            await push_matcher.finish(admin_only)
-        store.update_group(group_id, enabled=False)
+        service.settings.set_group(group_id, "push_enabled", False)
         await store.commit()
         await push_matcher.finish("已关闭每日活动推送。")
 
     if action in {"时间", "定时", "time", "设置时间"}:
-        if not _can_manage_push(event):
-            await push_matcher.finish(admin_only)
         value = tokens[1] if len(tokens) > 1 else ""
         parsed = parse_push_time(value)
         if not parsed:
-            await push_matcher.finish("时间格式不对哦，正确写法：活动提醒 时间 21:30")
-        hour, minute = parsed
-        store.update_group(group_id, hour=hour, minute=minute, enabled=True)
+            await push_matcher.finish("时间格式不对哦，正确写法：活动设置 时间 21:30")
+        service.settings.set_group(group_id, "push_time", format_clock(*parsed))
+        service.settings.set_group(group_id, "push_enabled", True)
         await store.commit()
         await push_matcher.finish(
-            f"✅ 每日推送时间已设为 {hour:02d}:{minute:02d}（同时开启了推送）。"
+            f"✅ 每日推送时间已设为 {format_clock(*parsed)}（同时开启了推送）。"
         )
 
     if action in {"立即", "马上", "now", "推送"}:
-        if not _can_manage_push(event):
-            await push_matcher.finish(admin_only)
-        result = await push_group_once(group_id, bot=bot)
-        if result:
+        if await push_group_once(group_id, bot=bot):
             await push_matcher.finish()
         await push_matcher.finish("这次推送失败了，可能是数据还没拉到或者机器人不在群里。")
 
     await push_matcher.finish(
-        "用法：\n 活动提醒 开 / 关\n 活动提醒 时间 21:30\n 活动提醒 状态\n 活动提醒 立即"
+        "用法：\n 活动提醒 开 / 关\n 活动提醒 时间 21:30\n 活动提醒 立即\n更多设置用「活动设置」"
+    )
+
+
+# --------------------------------------------------------------------------- 全部设置
+settings_matcher = on_command(
+    "活动设置",
+    aliases={"活动配置", "活动设定", "设置活动"},
+    priority=8,
+    block=True,
+)
+
+
+@settings_matcher.handle()
+async def _handle_settings(event: MessageEvent, args: Message = CommandArg()) -> None:
+    if not isinstance(event, GroupMessageEvent):
+        await settings_matcher.finish(_group_only_hint())
+
+    await service.startup()
+    group_id = event.group_id
+    raw = args.extract_plain_text().strip()
+    head, _, rest = raw.partition(" ")
+    head = head.strip()
+    rest = rest.strip()
+
+    if not head or head in {"查看", "状态", "show", "list"}:
+        await settings_matcher.finish(service.settings.describe(group_id))
+
+    if head in {"帮助", "help", "?"}:
+        await settings_matcher.finish(service.settings.help_text())
+
+    # ---- 全局设置（超管）
+    if head.lower() in {"全局", "global"}:
+        if not _is_superuser(event):
+            await settings_matcher.finish(superuser_only)
+        option_name, _, option_value = rest.partition(" ")
+        option = find_global_option(option_name.strip())
+        if not option or not option_value.strip():
+            await settings_matcher.finish(
+                "用法：\n 活动设置 全局 缓存 1800\n 活动设置 全局 刷新 60\n"
+                " 活动设置 全局 数据源 https://…/activity"
+            )
+        ok, value = coerce_option(option, option_value.strip())
+        if not ok:
+            await settings_matcher.finish(f"「{option.label}」{value}")
+        service.settings.set_global(option.key, value)
+        await store.commit()
+        service.settings.apply_to_source(service.source)
+        await settings_matcher.finish(
+            f"✅ 全局「{option.label}」已设为 {format_value(option, value)}"
+        )
+
+    # ---- 群设置
+    if not _can_manage(event, group_id):
+        await settings_matcher.finish(admin_only)
+
+    option = find_group_option(head)
+    if not option:
+        await settings_matcher.finish(
+            f"没有「{head}」这个配置项，发送「活动设置 帮助」看看能改哪些。"
+        )
+    if not rest:
+        alias = option.aliases[0] if option.aliases else option.label
+        suffix = f"，{option.hint}" if option.hint else ""
+        await settings_matcher.finish(f"用法：活动设置 {alias} <值>{suffix}")
+
+    ok, value = coerce_option(option, rest)
+    if not ok:
+        await settings_matcher.finish(f"「{option.label}」{value}")
+
+    service.settings.set_group(group_id, option.key, value)
+    await store.commit()
+
+    extra = ""
+    if option.key == "push_enabled" and value:
+        extra = f"\n每天 {service.settings.group(group_id).push_time} 自动播报。"
+    await settings_matcher.finish(
+        f"✅ 本群「{option.label}」已设为 {format_value(option, value)}。{extra}"
     )
 
 

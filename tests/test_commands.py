@@ -111,10 +111,10 @@ async def test_private_done(bot, offline):
 async def test_reminder_permission(bot, offline):
     await handle_event(bot, group_event("/活动提醒 开", role="member"))
     assert "管理员" in bot.sent[-1][1]["message"].extract_plain_text()
-    assert not store.group(888).get("enabled")
+    assert not store.group(888).get("push_enabled")
 
     await handle_event(bot, group_event("/活动提醒 开", user_id=50, role="admin"))
-    assert store.group(888).get("enabled") is True
+    assert store.group(888).get("push_enabled") is True
     assert "已开启" in bot.sent[-1][1]["message"].extract_plain_text()
 
 
@@ -122,8 +122,8 @@ async def test_reminder_permission(bot, offline):
 async def test_reminder_time(bot, offline):
     await handle_event(bot, group_event("/活动提醒 时间 22:30", user_id=50, role="owner"))
     record = store.group(888)
-    assert (record["hour"], record["minute"]) == (22, 30)
-    assert record["enabled"] is True
+    assert record["push_time"] == "22:30"
+    assert record["push_enabled"] is True
 
 
 @pytest.mark.asyncio

@@ -135,14 +135,14 @@ async def test_added_member_is_at_in_push(bot, offline, monkeypatch):
 async def test_push_can_be_enabled_by_member_when_configured(bot, offline, monkeypatch):
     monkeypatch.setattr(config, "hoyo_events_push_admin_only", False)
     await handle_event(bot, group_event("/活动提醒 开", role="member"))
-    assert store.group(888)["enabled"] is True
+    assert store.group(888)["push_enabled"] is True
     assert "已开启" in bot.last_text
 
 
 @pytest.mark.asyncio
 async def test_push_still_admin_only_by_default(bot, offline):
     await handle_event(bot, group_event("/活动提醒 开", role="member"))
-    assert not store.group(888).get("enabled")
+    assert not store.group(888).get("push_enabled")
     assert "管理员" in bot.last_text
 
 

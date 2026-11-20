@@ -59,7 +59,7 @@ def test_persistence_roundtrip(tmp_path):
     path = tmp_path / "store.json"
     first = DataStore(path)
     first.mark_done("group_1", 100, ["a#1"])
-    first.update_group(1, enabled=True)
+    first.update_group(1, push_enabled=True, push_time="22:15")
     first.set_snapshot("ys", {"activities": [], "version": "7.2"})
 
     import asyncio
@@ -69,7 +69,8 @@ def test_persistence_roundtrip(tmp_path):
     second = DataStore(path)
     asyncio.run(second.load())
     assert second.done_uids("group_1", 100) == {"a#1"}
-    assert second.group(1)["enabled"] is True
+    assert second.group(1)["push_enabled"] is True
+    assert second.group(1)["push_time"] == "22:15"
     assert second.snapshot("ys")["version"] == "7.2"
 
 
