@@ -6,6 +6,7 @@ from functools import lru_cache
 from io import BytesIO
 from itertools import groupby
 from pathlib import Path
+from random import choice
 
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
@@ -19,7 +20,10 @@ PANEL = WIDTH - MARGIN * 2
 INK = "#1e293b"
 MUTED = "#475569"
 ACCENT = "#6249a2"
-REMINDER_BACKGROUND = Path(__file__).with_name("assets") / "peach-meadow.png"
+REMINDER_BACKGROUNDS = tuple(
+    Path(__file__).with_name("assets") / name
+    for name in ("peach-meadow.png", "coastal-grass.png", "sunny-creek.png", "sunset-windmill.png")
+)
 REMINDER_MIN_HEIGHT = 1200
 REMINDER_HEADER_HEIGHT = 410
 AVATAR_SIZE = 62
@@ -196,11 +200,11 @@ class _Card:
             )
             y += height
 
-    def png(self, *, illustrated: bool = False) -> bytes:
+    def png(self, *, illustration: Path | None = None) -> bytes:
         gap = 16
         height = MARGIN * 2 + sum(panel.height for panel in self.panels) + gap * (len(self.panels) - 1)
-        if illustrated:
-            image = _meadow_background(max(height + 88, REMINDER_MIN_HEIGHT))
+        if illustration is not None:
+            image = _reminder_background(illustration, max(height + 88, REMINDER_MIN_HEIGHT))
         else:
             background = ImageOps.colorize(Image.linear_gradient("L"), "#e3e9ff", "#f9e9ed")
             image = background.resize((WIDTH, height))
@@ -213,15 +217,15 @@ class _Card:
         return buffer.getvalue()
 
 
-@lru_cache(maxsize=1)
-def _meadow_art() -> Image.Image:
-    with Image.open(REMINDER_BACKGROUND) as source:
+@lru_cache(maxsize=len(REMINDER_BACKGROUNDS))
+def _reminder_art(path: Path) -> Image.Image:
+    with Image.open(path) as source:
         return ImageOps.fit(source.convert("RGB"), (WIDTH, REMINDER_MIN_HEIGHT))
 
 
-def _meadow_background(height: int) -> Image.Image:
+def _reminder_background(path: Path, height: int) -> Image.Image:
     try:
-        art = _meadow_art()
+        art = _reminder_art(path)
     except OSError:
         return ImageOps.colorize(Image.linear_gradient("L"), "#ccecf5", "#d9ebac").resize(
             (WIDTH, height)
@@ -316,6 +320,7 @@ def render_personal_reminder_cards(
     completed = [entry for entry in view.entries if entry.done]
     entries = pending + completed
     pages = range(0, len(entries), REMINDER_PAGE_SIZE)
+    illustration = choice(REMINDER_BACKGROUNDS)
     images = []
     for number, start in enumerate(pages, start=1):
         card = _new_card(font)
@@ -333,5 +338,5 @@ def render_personal_reminder_cards(
         if not completed and number == len(pages):
             card.section("已完成", ["还没有标记完成的活动"], accent="#18644d", illustrated=True)
         card.section("", [REMINDER_FOOTER], quiet=True, illustrated=True)
-        images.append(card.png(illustrated=True))
+        images.append(card.png(illustration=illustration))
     return images

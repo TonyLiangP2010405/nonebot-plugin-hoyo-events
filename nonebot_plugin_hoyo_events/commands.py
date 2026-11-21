@@ -14,6 +14,7 @@ from nonebot.adapters.onebot.v11 import (
 from nonebot.params import CommandArg
 
 from .formatter import (
+    describe_personal_reminder,
     per_event_lines,
     per_person_lines,
     render_completion,
@@ -32,6 +33,7 @@ from .settings import (
     find_group_option,
     format_clock,
     format_value,
+    parse_int,
 )
 
 logger = logging.getLogger("nonebot_plugin_hoyo_events")
@@ -615,6 +617,14 @@ async def _handle_watchlist(event: MessageEvent) -> None:
 
 
 # --------------------------------------------------------------------------- 提醒设置
+PERSONAL_REMINDER_USAGE = (
+    "设置本群的个人提醒：\n"
+    " · 活动提醒 个人 每天\n"
+    " · 活动提醒 个人 倒计时 3（结束前 3 天起每天提醒）\n"
+    "倒计时可填 0–365 天，0 表示只在结束当天提醒。"
+)
+
+
 push_matcher = on_command(
     "活动提醒",
     aliases={"活动推送", "活动订阅"},
@@ -634,7 +644,28 @@ async def _handle_push_settings(
     tokens = _split_tokens(args.extract_plain_text())
     action = tokens[0] if tokens else "状态"
     group_id = event.group_id
+    user_id = int(event.get_user_id())
     current = service.settings.group(group_id)
+
+    if action in {"个人", "我的"}:
+        options = tokens[1:]
+        if not options:
+            days = store.personal_reminder_days(group_id, user_id)
+            await push_matcher.finish(f"我的提醒：{describe_personal_reminder(days)}\n\n{PERSONAL_REMINDER_USAGE}")
+        if options == ["每天"]:
+            days = None
+        else:
+            if options[0] == "倒计时":
+                options = options[1:]
+            days = parse_int(options[0].removesuffix("天")) if len(options) == 1 else None
+            if days is None or not 0 <= days <= 365:
+                await push_matcher.finish(PERSONAL_REMINDER_USAGE)
+        store.set_personal_reminder_days(group_id, user_id, days)
+        await store.commit()
+        reply = f"✅ 本群个人提醒已设为：{describe_personal_reminder(days)}。"
+        if not store.player(build_scope_key(group_id), user_id):
+            reply += "\n发送「活动关注」加入本群提醒名单。"
+        await push_matcher.finish(reply)
 
     if action in {"状态", "查看", "info", "status"}:
         await push_matcher.finish(
@@ -645,7 +676,8 @@ async def _handle_push_settings(
                     players=store.player_count(build_scope_key(group_id)),
                     data_status=service.data_status(),
                     total_active=len(service.active_activities()),
-                    muted=int(event.get_user_id()) in store.muted(group_id),
+                    muted=user_id in store.muted(group_id),
+                    reminder_days=store.personal_reminder_days(group_id, user_id),
                 )
             )
         )
@@ -684,7 +716,8 @@ async def _handle_push_settings(
         await push_matcher.finish("这次没有发出个人提醒。可能没有待提醒成员、还没到间隔时间，或发送失败。")
 
     await push_matcher.finish(
-        "用法：\n 活动提醒 开 / 关\n 活动提醒 时间 21:30\n 活动提醒 立即\n更多设置用「活动设置」"
+        "用法：\n 活动提醒 开 / 关\n 活动提醒 时间 21:30\n 活动提醒 立即\n"
+        " 活动提醒 个人\n更多设置用「活动设置」"
     )
 
 

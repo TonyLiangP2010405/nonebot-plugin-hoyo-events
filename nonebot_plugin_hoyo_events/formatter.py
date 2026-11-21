@@ -372,6 +372,8 @@ def render_help(push_time: str, remind_days: int, status_line: str = "") -> str:
         " · 活动取关 [@小明]   退出 / 移除",
         " · 活动名单          看名单和各自进度",
         " · 活动免打扰         别再 @ 我",
+        " · 活动提醒 个人 每天        每天提醒未完成活动",
+        " · 活动提醒 个人 倒计时 3    活动结束前 3 天才开始每天提醒",
         "",
         "【群设置】",
         " · 活动设置          查看本群全部设置",
@@ -392,6 +394,14 @@ def render_help(push_time: str, remind_days: int, status_line: str = "") -> str:
     return "\n".join(lines)
 
 
+def describe_personal_reminder(days: Optional[int]) -> str:
+    if days is None:
+        return "每天提醒未完成活动"
+    if days == 0:
+        return "只在活动结束当天提醒"
+    return f"活动结束前 {days} 天开始每天提醒"
+
+
 def render_status(
     enabled: bool,
     push_time: str,
@@ -399,6 +409,7 @@ def render_status(
     data_status: str,
     total_active: int,
     muted: bool,
+    reminder_days: Optional[int] = None,
 ) -> str:
     lines = [
         "⚙️ 活动提醒设置",
@@ -406,7 +417,7 @@ def render_status(
         f" · 每日推送：{'已开启' if enabled else '已关闭'}",
         f" · 推送时间：{push_time}",
         f" · 登记人数：{players} 人",
-        f" · 我的提醒：{'已免打扰' if muted else '正常'}",
+        f" · 我的提醒：{'已免打扰' if muted else describe_personal_reminder(reminder_days)}",
         f" · 进行中活动：{total_active} 个",
         f" · 数据状态：{data_status}",
     ]

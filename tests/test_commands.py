@@ -165,6 +165,27 @@ async def test_reminder_status(bot, offline):
 
 
 @pytest.mark.asyncio
+async def test_member_can_set_own_countdown_without_affecting_other_users_or_groups(bot, offline):
+    await handle_event(bot, group_event("/活动提醒 个人 倒计时 3"))
+    assert "结束前 3 天" in bot.last_text
+    assert store.personal_reminder_days(888, 100) == 3
+    assert store.personal_reminder_days(888, 200) is None
+    assert store.personal_reminder_days(999, 100) is None
+    assert not store.player("g888", 100)
+
+    await handle_event(bot, group_event("/活动提醒 状态"))
+    assert "我的提醒：活动结束前 3 天" in bot.last_text
+
+    await handle_event(bot, group_event("/活动提醒 个人 倒计时 -1"))
+    assert "0–365" in bot.last_text
+    assert store.personal_reminder_days(888, 100) == 3
+
+    await handle_event(bot, group_event("/活动提醒 个人 每天"))
+    assert "每天提醒未完成活动" in bot.last_text
+    assert store.personal_reminder_days(888, 100) is None
+
+
+@pytest.mark.asyncio
 async def test_mute_command(bot, offline):
     store.touch_player("g888", 100, "小明")
     await handle_event(bot, group_event("/活动免打扰"))

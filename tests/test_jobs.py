@@ -7,7 +7,7 @@ from helpers import activity_dict, group_event
 from nonebot.message import handle_event
 
 from nonebot_plugin_hoyo_events import jobs
-from nonebot_plugin_hoyo_events.models import now
+from nonebot_plugin_hoyo_events.models import iso, now
 from nonebot_plugin_hoyo_events.runtime import service, store
 from nonebot_plugin_hoyo_events.store import DataStore
 
@@ -41,6 +41,37 @@ async def test_personal_reminders_take_turns_across_midnight(bot, offline, monke
     assert _at_segments(bot.messages[-1]) == [300]
     assert "提醒下一位" not in bot.last_text
     assert await jobs.push_due_groups(start + timedelta(minutes=45)) == []
+    assert await jobs.push_due_groups(start + timedelta(days=1)) == [888]
+    assert _at_segments(bot.messages[-1]) == [100]
+
+
+@pytest.mark.asyncio
+async def test_countdown_members_join_the_daily_queue_only_when_activity_is_due(
+    bot, offline, monkeypatch
+):
+    start = _enable(bot, monkeypatch, 100, 200, 300)
+    store.set_personal_reminder_days(888, 200, 3)
+    store.set_personal_reminder_days(888, 300, 0)
+    store.snapshot("ys")["activities"][0]["end"] = iso(start + timedelta(days=4, hours=1))
+
+    assert await jobs.push_due_groups(start) == [888]
+    assert _at_segments(bot.messages[-1]) == [100]
+    assert await jobs.push_due_groups(start + timedelta(minutes=15)) == []
+    assert await jobs.push_due_groups(start + timedelta(days=1, minutes=-1)) == []
+
+    for day in (1, 2):
+        assert await jobs.push_due_groups(start + timedelta(days=day)) == [888]
+        assert _at_segments(bot.messages[-1]) == [200]
+        assert "砺行修远" in bot.last_text  # 卡片仍展示所有未完成活动。
+        assert await jobs.push_due_groups(start + timedelta(days=day, minutes=15)) == [888]
+        assert _at_segments(bot.messages[-1]) == [100]
+        assert await jobs.push_due_groups(start + timedelta(days=day, minutes=30)) == []
+
+    assert await jobs.push_due_groups(start + timedelta(days=4)) == [888]
+    assert _at_segments(bot.messages[-1]) == [200]
+    assert await jobs.push_due_groups(start + timedelta(days=4, minutes=15)) == [888]
+    assert _at_segments(bot.messages[-1]) == [300]
+    assert "今天结束" in bot.last_text
 
 
 @pytest.mark.asyncio
@@ -92,7 +123,14 @@ async def test_new_activity_resumes_reminders_after_everyone_finishes(bot, offli
 
 
 @pytest.mark.asyncio
-async def test_persisted_queue_resumes_without_duplicate(bot, offline, tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    "downtime",
+    (timedelta(minutes=15), timedelta(days=1, minutes=15), timedelta(days=2, hours=-1)),
+    ids=("same-round", "past-next-start", "before-start-after-multiple-days"),
+)
+async def test_persisted_queue_resumes_without_duplicate(
+    bot, offline, tmp_path, monkeypatch, downtime
+):
     start = _enable(bot, monkeypatch, 100, 200)
     monkeypatch.setattr(store, "path", tmp_path / "reminders.json")
     assert await jobs.push_due_groups(start) == [888]
@@ -101,8 +139,9 @@ async def test_persisted_queue_resumes_without_duplicate(bot, offline, tmp_path,
     await reloaded.load()
     monkeypatch.setattr(store, "_data", reloaded.data)
     assert await jobs.push_due_groups(start + timedelta(minutes=2)) == []
-    assert await jobs.push_due_groups(start + timedelta(minutes=15)) == [888]
+    assert await jobs.push_due_groups(start + downtime) == [888]
     assert _at_segments(bot.messages[-1]) == [200]
+    assert await jobs.push_due_groups(start + downtime + timedelta(minutes=15)) == []
 
 
 @pytest.mark.asyncio

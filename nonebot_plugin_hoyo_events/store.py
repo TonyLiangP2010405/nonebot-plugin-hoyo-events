@@ -303,6 +303,20 @@ class DataStore:
     def all_groups(self) -> dict:
         return self._data["groups"]
 
+    def personal_reminder_days(self, group_id: int, user_id: int) -> Optional[int]:
+        days = self.group(group_id).get("personal_reminder_days", {}).get(str(user_id))
+        return days if type(days) is int and days >= 0 else None
+
+    def set_personal_reminder_days(
+        self, group_id: int, user_id: int, days: Optional[int]
+    ) -> None:
+        key = str(user_id)
+        if days is None:
+            self.group(group_id).get("personal_reminder_days", {}).pop(key, None)
+        else:
+            record = self.update_group(group_id)
+            record.setdefault("personal_reminder_days", {})[key] = days
+
     def muted(self, group_id: int) -> set:
         value = self.group(group_id).get("muted") or []
         return {int(item) for item in value if str(item).lstrip("-").isdigit()}

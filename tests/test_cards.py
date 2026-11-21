@@ -10,7 +10,7 @@ from nonebot.message import handle_event
 from PIL import Image
 
 from nonebot_plugin_hoyo_events import cards, jobs, messaging
-from nonebot_plugin_hoyo_events.runtime import config, store
+from nonebot_plugin_hoyo_events.runtime import config, service, store
 
 
 def _png(message):
@@ -77,6 +77,26 @@ async def test_personal_reminder_shows_avatar_for_each_mentioned_user(bot, offli
         image = _png(message)
         assert image.height >= cards.REMINDER_MIN_HEIGHT > image.width
         assert image.getpixel(avatar_center) == colors[uid]
+
+
+def test_personal_reminder_draws_one_template_for_all_pages(offline, monkeypatch):
+    if not cards._font_path(config.hoyo_events_card_font):
+        pytest.skip("系统没有可用的中文字体")
+    backgrounds = cards.REMINDER_BACKGROUNDS
+    assert len(backgrounds) == 4
+    picks = iter(backgrounds)
+    monkeypatch.setattr(cards, "choice", lambda pool: next(picks))
+    monkeypatch.setattr(cards, "REMINDER_PAGE_SIZE", 2)
+    view = service.build_view()
+
+    for path in backgrounds:
+        with Image.open(path) as source:
+            expected = source.resize((cards.WIDTH, cards.REMINDER_MIN_HEIGHT)).getpixel((0, 0))
+        pages = cards.render_personal_reminder_cards(view, "小明", font=config.hoyo_events_card_font)
+        assert len(pages) == 2
+        for page in pages:
+            with Image.open(BytesIO(page)) as image:
+                assert image.getpixel((0, 0)) == expected
 
 
 @pytest.mark.asyncio
