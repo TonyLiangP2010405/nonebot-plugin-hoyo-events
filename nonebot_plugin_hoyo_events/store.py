@@ -30,6 +30,7 @@ def default_data() -> dict:
         "groups": {},
         "settings": {},
         "meta": {},
+        "numbered_views": {},
     }
 
 
@@ -129,6 +130,9 @@ class DataStore:
             logger.error("保存活动数据失败：%s", exc)
 
     # ------------------------------------------------------------------ 数据快照
+    def numbered_views(self) -> dict:
+        return self._data["numbered_views"]
+
     def snapshot(self, game: str) -> dict:
         value = self._data["snapshots"].get(game)
         return value if isinstance(value, dict) else {}

@@ -11,7 +11,7 @@ from nonebot.adapters.onebot.v11 import Bot
 from .messaging import build_personal_reminder_message
 from .models import Entry, View, now, parse_datetime
 from .runtime import service, store
-from .service import build_scope_key, build_view_key
+from .service import build_message_view_key, build_scope_key, build_view_key
 
 logger = logging.getLogger("nonebot_plugin_hoyo_events")
 
@@ -130,7 +130,7 @@ async def push_group_once(
         key = str(uid)
         for candidate in candidates:
             try:
-                await candidate.send_group_msg(group_id=group_id, message=message)
+                result = await candidate.send_group_msg(group_id=group_id, message=message)
             except Exception as exc:
                 logger.warning("群 %s 给 %s 的活动提醒发送失败：%s", group_id, uid, exc)
                 continue
@@ -139,10 +139,12 @@ async def push_group_once(
             state["round_pending"] = len(queue) > 1
             state["sent"][key] = sorted(due.union(state["sent"].get(key, [])))
             state["attempts"].pop(key, None)
-            view_key = build_view_key(group_id, uid)
-            latest = service.get_view(view_key)
-            if latest is None or latest.at <= view.at:
-                service.remember_view(view_key, view)
+            message_id = result.get("message_id") if isinstance(result, dict) else None
+            service.remember_view(
+                build_view_key(group_id, uid),
+                view,
+                build_message_view_key(scope, str(candidate.self_id), message_id),
+            )
             await store.commit()
             return True
 

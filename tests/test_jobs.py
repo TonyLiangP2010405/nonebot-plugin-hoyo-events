@@ -93,6 +93,23 @@ async def test_reminder_lists_both_statuses_and_saves_numbers_for_recipient(bot,
 
 
 @pytest.mark.asyncio
+async def test_reminder_numbers_survive_overnight_restart_and_activity_reordering(
+    bot, offline, tmp_path, monkeypatch
+):
+    _enable(bot, monkeypatch, 100, push_time="00:00")
+    monkeypatch.setattr(store, "path", tmp_path / "reminders.json")
+    assert await jobs.push_due_groups(now() - timedelta(hours=12)) == [888]
+
+    reloaded = DataStore(store.path)
+    await reloaded.load()
+    monkeypatch.setattr(store, "_data", reloaded.data)
+    store.snapshot("ys")["activities"].append(activity_dict("新活动", "ys", "ys.new#1", 1))
+
+    await handle_event(bot, group_event("/已完成 1"))
+    assert store.done_uids("g888", 100) == {"ys.a#1"}
+
+
+@pytest.mark.asyncio
 async def test_queue_skips_users_who_finish_waiting_or_mute(bot, offline, monkeypatch):
     start = _enable(bot, monkeypatch, 100, 200, 300, 400)
     assert await jobs.push_due_groups(start) == [888]

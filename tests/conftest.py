@@ -102,7 +102,6 @@ def offline(monkeypatch):
         return {}
 
     monkeypatch.setattr(service, "ensure_data", fake_ensure)
-    monkeypatch.setattr(service, "_views", {})
     monkeypatch.setattr(service, "_started", True)
     return store
 
@@ -120,6 +119,5 @@ def clean_store(monkeypatch):
         return {}
 
     monkeypatch.setattr(service, "ensure_data", fake_ensure)
-    monkeypatch.setattr(service, "_views", {})
     monkeypatch.setattr(service, "_started", True)
     return store

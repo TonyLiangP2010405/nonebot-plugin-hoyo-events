@@ -23,9 +23,9 @@ from .store import DataStore
 
 logger = logging.getLogger("nonebot_plugin_hoyo_events")
 
-# 视图缓存时长：超过后编号（1、2、3…）作废，只能按名称标记
-VIEW_TTL = 6 * 3600
-VIEW_LIMIT = 800
+# 保留近期卡片的编号映射，跨过夜间和 Bot 重启仍可使用。
+VIEW_TTL = timedelta(days=7)
+VIEW_LIMIT = 2400
 
 ALL_TOKENS = {"全部", "所有", "全部活动", "all", "ALL", "a"}
 
@@ -67,7 +67,6 @@ class ActivityService:
         self.source = source
         self.config = config
         self.settings = settings or SettingsResolver(store, config)
-        self._views: dict = {}
         self._started = False
 
     def group_settings(self, group_id: Optional[int]) -> GroupSettings:
@@ -179,34 +178,33 @@ class ActivityService:
         return view
 
     # ------------------------------------------------------------------ 视图缓存
-    def remember_view(self, key: str, view: View) -> None:
-        if not key:
-            return
-        self._views[key] = view
-        if len(self._views) > VIEW_LIMIT:
-            ordered = sorted(self._views.items(), key=lambda item: item[1].at)
-            for old_key, _ in ordered[: len(self._views) - VIEW_LIMIT]:
-                self._views.pop(old_key, None)
+    def remember_view(
+        self, key: str, view: View, *aliases: str, limit: Optional[int] = None
+    ) -> None:
+        """保存实际展示的编号和活动 UID，由调用方在发送成功后提交。"""
+        views = self.store.numbered_views()
+        stamp = view.at.timestamp()
+        snapshot = {
+            "at": stamp,
+            "ids": {str(entry.index): entry.activity.uid for entry in view.entries[:limit]},
+        }
+        for name in (key, *aliases):
+            if name and views.get(name, {}).get("at", 0) <= stamp:
+                views[name] = snapshot
+        if len(views) > VIEW_LIMIT:
+            ordered = sorted(views, key=lambda name: views[name]["at"])
+            for old_key in ordered[: len(views) - VIEW_LIMIT]:
+                views.pop(old_key)
 
-    def get_view(self, *keys: str) -> Optional[View]:
-        """取最新的一份有效视图。"""
-
-        best: Optional[View] = None
-        limit = now() - timedelta(seconds=VIEW_TTL)
+    def get_view(self, *keys: str, at: Optional[datetime] = None) -> Optional[dict]:
+        """按优先顺序取一份有效的编号映射。"""
+        limit = ((at or now()) - VIEW_TTL).timestamp()
+        views = self.store.numbered_views()
         for key in keys:
-            view = self._views.get(key)
-            if not view or view.at < limit:
-                continue
-            if best is None or view.at > best.at:
-                best = view
-        return best
-
-    def view_by_index(self, index: int, *keys: str) -> Optional[Activity]:
-        view = self.get_view(*keys)
-        if not view:
-            return None
-        entry = view.by_index(index)
-        return entry.activity if entry else None
+            view = views.get(key)
+            if view and view["at"] >= limit:
+                return view["ids"]
+        return None
 
     # ------------------------------------------------------------------ 解析目标
     def _match_name(self, text: str, activities: list) -> list:
@@ -242,6 +240,8 @@ class ActivityService:
         at = at or now()
         outcome = CompletionOutcome()
         active = self.active_activities(None, at)
+        active_by_id = {act.uid: act for act in active}
+        numbered = self.get_view(*view_keys, at=at) or {}
         picked: dict = {}
 
         for token in tokens:
@@ -265,15 +265,15 @@ class ActivityService:
 
             if text.isdigit():
                 index = int(text)
-                activity = self.view_by_index(index, *view_keys)
-                if not activity:
+                uid = numbered.get(str(index))
+                if not uid:
                     outcome.errors.append(
-                        f"找不到第 {index} 项，请重新发送「{list_command}」查看编号"
+                        f"找不到第 {index} 项的编号，请发送「{list_command}」查看新列表"
                     )
-                elif activity.is_over(at):
-                    outcome.errors.append(f"{activity.name} 已经结束了")
+                elif uid not in active_by_id:
+                    outcome.errors.append(f"第 {index} 项已结束或不在当前活动中")
                 else:
-                    picked[activity.uid] = activity
+                    picked[uid] = active_by_id[uid]
                 continue
 
             matched = self._match_name(text, active)
@@ -457,6 +457,10 @@ def build_scope_key(group_id: Optional[int]) -> str:
     if group_id is None:
         return ""
     return f"g{group_id}"
+
+
+def build_message_view_key(scope: str, bot_id: str, message_id: Optional[int]) -> str:
+    return f"message:{scope}:{bot_id}:{message_id}" if message_id is not None else ""
 
 
 __all__ = [

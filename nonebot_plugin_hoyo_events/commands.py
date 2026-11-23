@@ -14,6 +14,7 @@ from nonebot.adapters.onebot.v11 import (
 from nonebot.params import CommandArg
 
 from .formatter import (
+    MAX_LINES,
     describe_personal_reminder,
     per_event_lines,
     per_person_lines,
@@ -25,8 +26,9 @@ from .formatter import (
 from .games import GAME_BY_KEY, resolve_game
 from .jobs import push_group_once
 from .messaging import append_lines, build_activity_message, build_text_card_message
+from .models import View
 from .runtime import parse_push_time, service, store
-from .service import build_scope_key, build_view_key, scope_of_private
+from .service import build_message_view_key, build_scope_key, build_view_key, scope_of_private
 from .settings import (
     coerce_option,
     find_global_option,
@@ -78,6 +80,30 @@ def _context(event: MessageEvent) -> tuple:
     if isinstance(event, GroupMessageEvent):
         return build_scope_key(event.group_id), event.group_id
     return scope_of_private(int(event.get_user_id())), None
+
+
+def _numbered_view_keys(event: MessageEvent, scope: str, group_id: int | None) -> tuple[str, ...]:
+    if event.reply is not None:
+        if event.reply.sender.user_id != event.self_id:
+            return ()
+        return (build_message_view_key(scope, str(event.self_id), event.reply.message_id),)
+    return (build_view_key(group_id, int(event.get_user_id())), build_scope_key(group_id))
+
+
+async def _send_numbered_view(
+    matcher, event: MessageEvent, message: Message, view: View, *, shared: bool = False
+) -> None:
+    scope, group_id = _context(event)
+    result = await matcher.send(message)
+    message_id = result.get("message_id") if isinstance(result, dict) else None
+    service.remember_view(
+        build_view_key(group_id, int(event.get_user_id())),
+        view,
+        build_scope_key(group_id) if shared else "",
+        build_message_view_key(scope, str(event.self_id), message_id),
+        limit=MAX_LINES,
+    )
+    await store.commit()
 
 
 MAX_WATCH_PER_COMMAND = 10
@@ -226,10 +252,8 @@ async def _send_list(matcher, event: MessageEvent, text: str) -> None:
             service.settings.set_group(group_id, "push_time", current.push_time)
 
     view = service.build_view(game, scope, user_id, group_id=group_id)
-    service.remember_view(build_view_key(group_id, user_id), view)
-    await store.commit()
-
     if not view.entries:
+        await store.commit()
         await matcher.finish("🎉 当前没有进行中的活动。新活动开始后会自动加入未完成列表。")
 
     title = f"{GAME_BY_KEY[game].name}活动" if game else "米哈游活动"
@@ -255,7 +279,7 @@ async def _send_list(matcher, event: MessageEvent, text: str) -> None:
             message += MessageSegment.text("\n\n⚠️ 还没完成的群友：")
             append_lines(message, lines)
 
-    await matcher.send(message)
+    await _send_numbered_view(matcher, event, message, view, shared=True)
 
 
 list_matcher = on_command(
@@ -306,26 +330,24 @@ async def _handle_done(event: MessageEvent, args: Message = CommandArg()) -> Non
     await _prepare()
 
     tokens = _split_tokens(args.extract_plain_text())
-    view_keys = (build_view_key(group_id, user_id), build_scope_key(group_id))
 
     if not tokens:
         view = service.build_view(None, scope, user_id, only_pending=True, group_id=group_id)
         if not view.entries:
             await done_matcher.finish("🎉 你没有未完成的活动，不会再 @ 你啦。")
-        service.remember_view(build_view_key(group_id, user_id), view)
-        await store.commit()
-        await done_matcher.finish(
-            await build_activity_message(
-                view,
-                remind_days=service.group_settings(group_id).remind_days,
-                title="你还没完成的活动",
-                footer="发送「已完成 编号」标记，例如：已完成 1 3\n也可以「已完成 全部」一键完成。",
-            )
+        message = await build_activity_message(
+            view,
+            remind_days=service.group_settings(group_id).remind_days,
+            title="你还没完成的活动",
+            footer="发送「已完成 编号」标记，例如：已完成 1 3\n也可以「已完成 全部」一键完成。",
         )
+        await _send_numbered_view(done_matcher, event, message, view)
+        await done_matcher.finish()
 
     if not service.has_data():
         await done_matcher.finish("😵 暂时拿不到活动数据，晚点再试试。")
 
+    view_keys = _numbered_view_keys(event, scope, group_id)
     outcome = await service.mark_completed(scope, user_id, tokens, nick=nick, view_keys=view_keys)
     pending = len(service.pending(scope, user_id))
     total = len(service.active_activities())
@@ -352,19 +374,16 @@ async def _handle_todo(event: MessageEvent) -> None:
     view = service.build_view(None, scope, user_id, only_pending=True, group_id=group_id)
     if not view.entries:
         await todo_matcher.finish("🎉 当前没有未完成的活动，全部搞定啦！")
-    service.remember_view(build_view_key(group_id, user_id), view)
-    await store.commit()
-
     done_count, total = service.done_count(scope, user_id)
-    await todo_matcher.finish(
-        await build_activity_message(
-            view,
-            remind_days=service.group_settings(group_id).remind_days,
-            title="你还没完成的活动",
-            progress=f"已完成 {done_count}/{total}",
-            footer="发送「已完成 编号」标记，例如：已完成 1 3",
-        )
+    message = await build_activity_message(
+        view,
+        remind_days=service.group_settings(group_id).remind_days,
+        title="你还没完成的活动",
+        progress=f"已完成 {done_count}/{total}",
+        footer="发送「已完成 编号」标记，例如：已完成 1 3",
     )
+    await _send_numbered_view(todo_matcher, event, message, view)
+    await todo_matcher.finish()
 
 
 # --------------------------------------------------------------------------- 取消完成
@@ -386,7 +405,6 @@ async def _handle_undo(event: MessageEvent, args: Message = CommandArg()) -> Non
         await undo_matcher.finish("😵 暂时拿不到活动数据，晚点再试试。")
 
     tokens = _split_tokens(args.extract_plain_text())
-    view_key = build_view_key(group_id, user_id)
     if not tokens:
         view = service.build_view(scope=scope, user_id=user_id, group_id=group_id, only_completed=True)
         if not view.entries:
@@ -397,10 +415,10 @@ async def _handle_undo(event: MessageEvent, args: Message = CommandArg()) -> Non
             title="你已完成的活动",
             footer="发送「取消完成 编号」恢复未完成，例如：取消完成 1\n也可以直接输入活动名。",
         )
-        service.remember_view(view_key, view)
-        await undo_matcher.finish(message)
+        await _send_numbered_view(undo_matcher, event, message, view)
+        await undo_matcher.finish()
 
-    view_keys = (view_key, build_scope_key(group_id))
+    view_keys = _numbered_view_keys(event, scope, group_id)
     outcome = await service.unmark_completed(scope, user_id, tokens, view_keys=view_keys)
     done, total = service.done_count(scope, user_id)
     await undo_matcher.finish(

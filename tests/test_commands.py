@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 from helpers import group_event, private_event
+from nonebot.adapters.onebot.v11.event import Reply, Sender
 from nonebot.message import handle_event
 
 from nonebot_plugin_hoyo_events.runtime import service, store
@@ -35,6 +36,32 @@ async def test_done_by_index(bot, offline):
     text = bot.sent[-1][1]["message"].extract_plain_text()
     assert "已记录完成 1 个活动" in text
     assert "幽境危战" in text
+
+
+@pytest.mark.asyncio
+async def test_group_members_can_complete_from_a_shared_list(bot, offline):
+    await handle_event(bot, group_event("/星铁活动", user_id=200))
+    await handle_event(bot, group_event("/已完成 1"))
+    assert store.done_uids("g888", 100) == {"sr.a#1"}
+
+
+@pytest.mark.asyncio
+async def test_reply_uses_original_numbering_after_a_newer_list_was_sent(bot, offline):
+    await handle_event(bot, group_event("/星铁活动"))
+    original = Reply(
+        time=0, message_type="group", message_id=1001, real_id=1001,
+        sender=Sender(user_id=int(bot.self_id)), message=bot.messages[-1],
+    )
+    await handle_event(bot, group_event("/原神活动"))
+    event = group_event("/已完成 1")
+    event.reply = original
+    await handle_event(bot, event)
+    assert store.done_uids("g888", 100) == {"sr.a#1"}
+
+    event = group_event("/已完成 1", group_id=999)
+    event.reply = original
+    await handle_event(bot, event)
+    assert not store.done_uids("g999", 100)
 
 
 @pytest.mark.asyncio

@@ -199,7 +199,6 @@ def test_scope_helpers():
 
 def test_view_expires(service, store):
     view = service.build_view(None, "group_1", 100)
-    view.at = now() - timedelta(days=1)
+    view.at = now() - timedelta(days=8)
     service.remember_view("g1:100", view)
     assert service.get_view("g1:100") is None
-    assert service.view_by_index(1, "g1:100") is None
